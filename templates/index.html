@@ -1,0 +1,481 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>NusaTool — Web Dashboard</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+body{font-family:'JetBrains Mono','Fira Code','Consolas',monospace;background:#0a0e1a;color:#c0c8d4;overflow-x:hidden}
+.container{max-width:1400px;margin:0 auto;padding:15px}
+
+/* Header */
+.hdr{background:linear-gradient(135deg,#0d1b2a,#1a1f3a);padding:15px 25px;border-radius:8px;border:1px solid #1e3a5f;margin-bottom:15px;display:flex;align-items:center;justify-content:space-between}
+.hdr h1{color:#00d4ff;font-size:1.3em;font-weight:700}
+.hdr h1 span{color:#ff4444}
+.hdr .ver{color:#556;font-size:.8em}
+.hdr .badge{display:inline-block;padding:2px 8px;border-radius:4px;font-size:.7em;margin-left:5px}
+.bg-red{background:#ff4444;color:#fff}
+.bg-cyan{background:#00d4ff;color:#0a0e1a}
+.bg-green{background:#00cc66;color:#0a0e1a}
+
+/* Layout */
+.row{display:grid;grid-template-columns:280px 1fr;gap:15px}
+@media(max-width:768px){.row{grid-template-columns:1fr}}
+
+/* Sidebar */
+.sidebar{background:#111827;border:1px solid #1e293b;border-radius:8px;padding:15px}
+.sidebar h2{color:#00d4ff;font-size:.85em;text-transform:uppercase;letter-spacing:1px;margin-bottom:10px;padding-bottom:5px;border-bottom:1px solid #1e293b}
+.mgroup{margin-bottom:12px}
+.mgroup-title{color:#556;font-size:.7em;text-transform:uppercase;margin-bottom:4px;padding-left:5px}
+.mbtn{display:block;width:100%;padding:7px 10px;margin:2px 0;background:#1a1f3a;border:1px solid #2a3f5f;color:#c0c8d4;border-radius:4px;cursor:pointer;font-size:.8em;font-family:inherit;text-align:left;transition:all .15s}
+.mbtn:hover{background:#2a3f5f;border-color:#00d4ff;color:#00d4ff}
+.mbtn.active{background:#0d2a4a;border-color:#00d4ff;color:#00d4ff}
+.mbtn .ico{display:inline-block;width:18px;text-align:center;margin-right:4px}
+
+/* Main */
+.main{background:#111827;border:1px solid #1e293b;border-radius:8px;padding:15px;min-height:500px}
+.main h2{color:#00d4ff;font-size:1em;margin-bottom:10px}
+
+/* Args input */
+.args-row{display:flex;gap:8px;margin-bottom:10px;flex-wrap:wrap}
+.args-row input{flex:1;min-width:200px;padding:8px 12px;background:#0a0e1a;border:1px solid #2a3f5f;border-radius:4px;color:#c0c8d4;font-family:inherit;font-size:.85em}
+.args-row input:focus{border-color:#00d4ff;outline:none}
+.args-row input::placeholder{color:#445}
+.btn{display:inline-flex;align-items:center;gap:5px;padding:8px 16px;border:none;border-radius:4px;cursor:pointer;font-family:inherit;font-size:.85em;font-weight:600;transition:all .15s}
+.btn-primary{background:#00d4ff;color:#0a0e1a}
+.btn-primary:hover{background:#00e5ff;box-shadow:0 0 15px rgba(0,212,255,.3)}
+.btn-danger{background:#ff4444;color:#fff}
+.btn-danger:hover{background:#ff5555}
+.btn-outline{background:transparent;border:1px solid #2a3f5f;color:#c0c8d4}
+.btn-outline:hover{border-color:#00d4ff;color:#00d4ff}
+.btn-success{background:#00cc66;color:#0a0e1a}
+
+/* Presets */
+.presets{display:flex;gap:4px;flex-wrap:wrap;margin-bottom:8px}
+.preset{background:#1a1f3a;border:1px solid #2a3f5f;border-radius:3px;padding:3px 6px;font-size:.7em;color:#889;cursor:pointer;transition:all .12s}
+.preset:hover{border-color:#00d4ff;color:#00d4ff}
+
+/* Output */
+.output{border:1px solid #1e293b;border-radius:4px;overflow:hidden;margin-top:10px}
+.output-bar{background:#1a1f3a;padding:5px 10px;font-size:.75em;color:#556;display:flex;justify-content:space-between;align-items:center}
+#output{background:#050810;padding:10px;min-height:300px;max-height:500px;overflow-y:auto;font-size:.78em;line-height:1.5;white-space:pre-wrap;word-break:break-all}
+#output .info{color:#00d4ff}
+#output .ok{color:#00cc66}
+#output .err{color:#ff4444}
+#output .warn{color:#ffaa00}
+#output .dim{color:#556}
+/* Scrollbar */
+#output::-webkit-scrollbar{width:5px}
+#output::-webkit-scrollbar-track{background:#0a0e1a}
+#output::-webkit-scrollbar-thumb{background:#2a3f5f;border-radius:3px}
+
+/* Status dots */
+.dot{display:inline-block;width:8px;height:8px;border-radius:50%;margin-right:5px}
+.dot-green{background:#00cc66;box-shadow:0 0 6px #00cc66}
+.dot-red{background:#ff4444;box-shadow:0 0 6px #ff4444}
+.dot-yellow{background:#ffaa00;box-shadow:0 0 6px #ffaa00}
+.dot-off{background:#445}
+
+/* Job list */
+.job-list{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:10px}
+.job-pill{background:#1a1f3a;border:1px solid #2a3f5f;border-radius:12px;padding:2px 10px;font-size:.7em;cursor:pointer;transition:all .12s}
+.job-pill:hover{border-color:#00d4ff}
+.job-pill.done{opacity:.5}
+
+/* Animations */
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:.4}}
+.loading{animation:pulse 1s infinite}
+
+/* Quick actions */
+.quick-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(140px,1fr));gap:6px;margin:10px 0}
+.quick-card{background:#0a0e1a;border:1px solid #1e293b;border-radius:6px;padding:10px;text-align:center;cursor:pointer;transition:all .15s}
+.quick-card:hover{border-color:#00d4ff;background:#0d1b2a}
+.quick-card .qico{font-size:1.5em;margin-bottom:4px}
+.quick-card .qlabel{font-size:.7em;color:#889}
+.quick-card .qdesc{font-size:.6em;color:#556;margin-top:2px}
+</style>
+</head>
+<body>
+<div class="container">
+  <div class="hdr">
+    <div>
+      <h1><span>▶</span> NusaTool <span class="badge bg-cyan">v{{ version }}</span></h1>
+    </div>
+    <div style="display:flex;gap:8px;align-items:center">
+      <span id="statusDot" class="dot dot-off"></span>
+      <span id="statusText" style="font-size:.75em;color:#556">idle</span>
+      <button class="btn btn-danger" onclick="clearAll()" style="font-size:.7em;padding:4px 10px">✕ Clear</button>
+    </div>
+  </div>
+
+  <div class="row">
+    <div class="sidebar">
+      <h2>⚡ Quick Scan</h2>
+      <div class="quick-grid" id="quickGrid"></div>
+
+      <h2 style="margin-top:12px">📦 Modules</h2>
+      <div class="mgroup">
+        <div class="mgroup-title">AUTOMATION</div>
+        <button class="mbtn" data-cmd='autopwn' data-args='' onclick="runModule(this)"><span class="ico">⚡</span>AutoPwn</button>
+      </div>
+      <div class="mgroup">
+        <div class="mgroup-title">WEB SCANNERS</div>
+        <button class="mbtn" data-cmd='urlscan' onclick="runModule(this)"><span class="ico">🌐</span>URL Scanner</button>
+        <button class="mbtn" data-cmd='cors' onclick="runModule(this)"><span class="ico">🔗</span>CORS Scanner</button>
+        <button class="mbtn" data-cmd='csrf' onclick="runModule(this)"><span class="ico">🔒</span>CSRF Scanner</button>
+        <button class="mbtn" data-cmd='deface' onclick="runModule(this)"><span class="ico">🖌️</span>Deface Tester</button>
+      </div>
+      <div class="mgroup">
+        <div class="mgroup-title">RECON</div>
+        <button class="mbtn" data-cmd='whois' onclick="runModule(this)"><span class="ico">📋</span>WHOIS</button>
+        <button class="mbtn" data-cmd='dns' onclick="runModule(this)"><span class="ico">🌍</span>DNS Recon</button>
+        <button class="mbtn" data-cmd='subdomain' onclick="runModule(this)"><span class="ico">🔍</span>Subdomain</button>
+        <button class="mbtn" data-cmd='paramspider' onclick="runModule(this)"><span class="ico">🕸️</span>ParamSpider</button>
+      </div>
+      <div class="mgroup">
+        <div class="mgroup-title">NETWORK</div>
+        <button class="mbtn" data-cmd='portscan -p 1-1024' onclick="runModule(this)"><span class="ico">🔌</span>Port Scan</button>
+        <button class="mbtn" data-cmd='servicedetect' onclick="runModule(this)"><span class="ico">🏷️</span>Service Detect</button>
+      </div>
+      <div class="mgroup">
+        <div class="mgroup-title">BRUTE</div>
+        <button class="mbtn" data-cmd='dirbust' onclick="runModule(this)"><span class="ico">📁</span>Dir Buster</button>
+        <button class="mbtn" data-cmd='loginbf' onclick="runModule(this)"><span class="ico">🔑</span>Login BF</button>
+        <button class="mbtn" data-cmd='autobf' onclick="runModule(this)"><span class="ico">🤖</span>Auto BF (URL only)</button>
+        <button class="mbtn" data-cmd='hashcrack' onclick="runModule(this)"><span class="ico">🔐</span>Hash Crack</button>
+      </div>
+      <button onclick="window.open('/api/clear','_self')" class="btn btn-outline" style="width:100%;margin-top:8px;font-size:.75em;text-align:center">🗑 Clear All Jobs</button>
+    </div>
+
+    <div class="main">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
+        <h2 id="moduleTitle">Ready</h2>
+        <div id="jobBadge"></div>
+      </div>
+
+      <div class="args-row">
+        <input id="targetInput" placeholder="Target / URL / Domain..." value="" spellcheck="false">
+        <input id="extraArgs" placeholder="Extra args (e.g., -p 80,443 -w wordlist)" spellcheck="false" style="flex:0.5;min-width:120px">
+        <button class="btn btn-primary" onclick="runCurrent()">▶ Run</button>
+      </div>
+
+      <div class="presets" id="presets"></div>
+
+      <div class="output">
+        <div class="output-bar">
+          <span id="outputStatus"><span class="dot dot-off"></span> idle</span>
+          <span style="display:flex;gap:6px">
+            <button class="btn btn-outline" onclick="clearOutput()" style="font-size:.7em;padding:3px 8px">Clear</button>
+            <button class="btn btn-outline" onclick="copyOutput()" style="font-size:.7em;padding:3px 8px">Copy</button>
+          </span>
+        </div>
+        <pre id="output"><span class="dim">▸ Select a module and click Run</span></pre>
+      </div>
+
+      <div id="jobList" class="job-list" style="margin-top:8px"></div>
+    </div>
+  </div>
+</div>
+
+<script>
+let CURRENT_MODULE = "portscan";
+let CURRENT_ARGS = "";
+let ACTIVE_JOBS = {};
+let EVENT_SOURCES = {};
+
+const MODULE_PRESETS = {
+  "portscan": [
+    {label: "Quick (1-1024)", args: ""},
+    {label: "Top 20", args: "-p 21,22,23,25,53,80,110,139,143,443,445,993,3306,3389,5432,5900,6379,8080,8443,27017"},
+    {label: "Full (1-65535)", args: "-p 1-65535 --timeout 2"},
+  ],
+  "urlscan": [
+    {label: "XSS+SQLi+LFI", args: ""},
+  ],
+  "subdomain": [
+    {label: "Default", args: ""},
+    {label: "50 threads", args: "--threads 50"},
+  ],
+  "dirbust": [
+    {label: "PHP", args: "--ext php"},
+    {label: "PHP+HTML", args: "--ext php,html,asp,aspx,jsp"},
+    {label: "10 threads", args: "--threads 20"},
+  ],
+  "autopwn": [
+    {label: "Default", args: "-p 1-1024"},
+    {label: "Fast", args: "-p 21,22,25,80,110,143,443,445,993,3306,3389,5900,6379,8080,8443,27017"},
+  ],
+  "paramspider": [
+    {label: "Root only", args: ""},
+    {label: "Include subs", args: "--subs"},
+    {label: "50 threads", args: "--threads 50"},
+  ],
+  "deface": [
+    {label: "Default", args: ""},
+  ],
+  "loginbf": [
+    {label: "Form (1 thread)", args: "--threads 1"},
+    {label: "Form (20 threads)", args: "--threads 20"},
+    {label: "JSON mode", args: "--mode json"},
+    {label: "Basic Auth", args: "--mode basic"},
+    {label: "Bearer Token", args: "--mode bearer"},
+  ],
+  "hashcrack": [
+    {label: "Default (auto)", args: ""},
+    {label: "MD5", args: "--type md5"},
+    {label: "SHA256", args: "--type sha256"},
+    {label: "8 threads", args: "--threads 8"},
+  ],
+  "autobf": [
+    {label: "Default", args: ""},
+    {label: "10 threads", args: "--threads 10"},
+    {label: "With delay", args: "--delay 0.5"},
+  ],
+};
+
+const QUICK_SCANS = [
+  {icon: "🔌", label: "Port Scan", desc: "1-1024", args: "portscan", targetHint: "example.com"},
+  {icon: "⚡", label: "Quick Ports", desc: "Top 20", args: "portscan -p 21,22,23,25,53,80,110,139,143,443,445,993,3306,3389,5432,5900,6379,8080,8443,27017", targetHint: "example.com"},
+  {icon: "🌐", label: "URL Scan", desc: "XSS/SQLi/LFI", args: "urlscan", targetHint: "http://target.com/page.php?id=1"},
+  {icon: "🔍", label: "Subdomain", desc: "Find subs", args: "subdomain", targetHint: "example.com"},
+  {icon: "📋", label: "WHOIS", desc: "Domain info", args: "whois", targetHint: "example.com"},
+  {icon: "🌍", label: "DNS", desc: "DNS records", args: "dns", targetHint: "example.com"},
+  {icon: "🔗", label: "CORS", desc: "CORS check", args: "cors", targetHint: "https://example.com"},
+  {icon: "🔒", label: "CSRF", desc: "CSRF check", args: "csrf", targetHint: "https://example.com/form"},
+  {icon: "🕸️", label: "ParamSpider", desc: "URL/param discovery", args: "paramspider", targetHint: "example.com"},
+  {icon: "🖌️", label: "Deface", desc: "Upload vuln scan", args: "deface", targetHint: "https://target.com"},
+  {icon: "🤖", label: "Auto BF", desc: "URL-only login", args: "autobf", targetHint: "https://target.com/login"},
+  {icon: "🔐", label: "Hash Crack", desc: "MD5/SHA1/SHA256", args: "hashcrack", targetHint: "5f4dcc3b5aa765d61d8327deb882cf99"},
+  {icon: "⚡", label: "AutoPwn", desc: "8-phase auto", args: "autopwn", targetHint: "http://target.com"},
+];
+
+function init() {
+  const grid = document.getElementById("quickGrid");
+  QUICK_SCANS.forEach(q => {
+    const card = document.createElement("div");
+    card.className = "quick-card";
+    card.innerHTML = `<div class="qico">${q.icon}</div><div class="qlabel">${q.label}</div><div class="qdesc">${q.desc}</div>`;
+    card.onclick = () => {
+      document.getElementById("targetInput").placeholder = q.targetHint || "target";
+      document.getElementById("targetInput").value = "";
+      document.getElementById("extraArgs").value = "";
+      runQuick(q.args, "");
+    };
+    grid.appendChild(card);
+  });
+  updateStatus("idle", "dot-off");
+}
+
+function updateStatus(text, dotClass) {
+  document.getElementById("statusText").textContent = text;
+  document.getElementById("statusDot").className = "dot " + dotClass;
+}
+
+function setActive(btn) {
+  document.querySelectorAll(".mbtn").forEach(b => b.classList.remove("active"));
+  if (btn) btn.classList.add("active");
+}
+
+function runModule(btn) {
+  setActive(btn);
+  const cmd = btn.dataset.cmd || "";
+  const parts = cmd.split(" ");
+  CURRENT_MODULE = parts[0];
+  CURRENT_ARGS = parts.slice(1).join(" ");
+  
+  document.getElementById("moduleTitle").textContent = "▶ " + CURRENT_MODULE.toUpperCase();
+  document.getElementById("extraArgs").value = CURRENT_ARGS;
+
+  // Load presets
+  const presetsDiv = document.getElementById("presets");
+  presetsDiv.innerHTML = "";
+  const p = MODULE_PRESETS[CURRENT_MODULE];
+  if (p) {
+    p.forEach(pr => {
+      const el = document.createElement("span");
+      el.className = "preset";
+      el.textContent = pr.label;
+      el.onclick = () => {
+        document.getElementById("extraArgs").value = pr.args;
+      };
+      presetsDiv.appendChild(el);
+    });
+  }
+
+  // Update target placeholder
+  const ip = document.getElementById("targetInput");
+  if (["portscan","servicedetect"].includes(CURRENT_MODULE)) ip.placeholder = "example.com | 192.168.1.1";
+  else if (["urlscan","cors","csrf","dirbust","loginbf","deface","autobf"].includes(CURRENT_MODULE)) ip.placeholder = "http://target.com/...";
+  else if (CURRENT_MODULE === "hashcrack") ip.placeholder = "5f4dcc3b5aa765d61d8327deb882cf99";
+  else if (["subdomain","whois","dns","paramspider"].includes(CURRENT_MODULE)) ip.placeholder = "example.com";
+  else if (CURRENT_MODULE === "autopwn") ip.placeholder = "http://target.com | example.com";
+}
+
+function runQuick(cmd, extra) {
+  const parts = cmd.split(" ");
+  CURRENT_MODULE = parts[0];
+  CURRENT_ARGS = parts.slice(1).join(" ") + " " + extra;
+  document.getElementById("moduleTitle").textContent = "▶ " + CURRENT_MODULE.toUpperCase();
+  document.getElementById("extraArgs").value = CURRENT_ARGS;
+  setActive(null);
+  // Auto-run if target is in input
+  const target = document.getElementById("targetInput").value.trim();
+  if (target) runIt(target);
+}
+
+function runCurrent() {
+  const target = document.getElementById("targetInput").value.trim();
+  if (!target) { appendLine("warn", "⚠ Enter a target first"); return; }
+  runIt(target);
+}
+
+function buildFlaggedArgs(target, extra) {
+  if (["urlscan","cors","csrf","xss","sqli","deface"].includes(CURRENT_MODULE)) {
+    return "-u " + target + " " + extra;
+  } else if (CURRENT_MODULE === "dirbust") {
+    return "-u " + target + " " + extra;
+  } else if (CURRENT_MODULE === "loginbf") {
+    return "-u " + target + " " + extra;
+  } else if (CURRENT_MODULE === "servicedetect") {
+    return "-t " + target + " " + extra;
+  } else if (CURRENT_MODULE === "hashcrack") {
+    return "-t " + target + " " + extra;
+  } else if (CURRENT_MODULE === "autobf") {
+    return target + " " + extra;
+  } else if (["subdomain","whois","dns","paramspider"].includes(CURRENT_MODULE)) {
+    return "-d " + target + " " + extra;
+  } else {
+    return target + " " + extra;
+  }
+}
+
+function runIt(target) {
+  const extra = document.getElementById("extraArgs").value.trim();
+  const flaggedArgs = buildFlaggedArgs(target, extra);
+  const fullArgs = CURRENT_MODULE + " " + flaggedArgs;
+
+  clearOutput();
+  appendLine("info", "▶ Running: " + fullArgs);
+  
+  fetch("/api/run", {
+    method: "POST",
+    headers: {"Content-Type": "application/json"},
+    body: JSON.stringify({ module: CURRENT_MODULE, args: flaggedArgs })
+  })
+  .then(r => r.json())
+  .then(data => {
+    const jobId = data.job_id;
+    if (!jobId) { appendLine("err", "✘ Failed to start job"); return; }
+    ACTIVE_JOBS[jobId] = true;
+    updateStatus("running", "dot-green");
+    refreshJobList();
+    startStream(jobId);
+  })
+  .catch(e => appendLine("err", "✘ " + e));
+}
+
+function startStream(jobId) {
+  const es = new EventSource("/api/stream/" + jobId);
+  EVENT_SOURCES[jobId] = es;
+  
+  es.onmessage = (e) => {
+    if (e.data === "__DONE__") {
+      es.close();
+      delete EVENT_SOURCES[jobId];
+      ACTIVE_JOBS[jobId] = false;
+      updateStatus("done", "dot-yellow");
+      appendLine("info", "━━━ DONE ━━━");
+      refreshJobList();
+    } else if (e.data) {
+      appendOutput(e.data);
+    }
+  };
+  es.onerror = () => {
+    es.close();
+    delete EVENT_SOURCES[jobId];
+    ACTIVE_JOBS[jobId] = false;
+    updateStatus("error", "dot-red");
+    refreshJobList();
+  };
+}
+
+function appendOutput(text) {
+  const out = document.getElementById("output");
+  const div = document.createElement("div");
+  if (text.includes("[!]") || text.includes("✘") || text.includes("Error") || text.includes("CRITICAL") || text.includes("VULN")) {
+    div.className = "err";
+  } else if (text.includes("✔") || text.includes("[+]") || text.includes("open") || text.includes("found")) {
+    div.className = "ok";
+  } else if (text.includes("[*]") || text.includes("▶") || text.includes("Running") || text.includes("DONE")) {
+    div.className = "info";
+  } else if (text.includes("⚠") || text.includes("WAF") || text.includes("HIGH")) {
+    div.className = "warn";
+  } else if (text.startsWith("  ") || text.startsWith("─") || text.startsWith("═")) {
+    div.className = "dim";
+  }
+  div.textContent = text;
+  out.appendChild(div);
+  out.scrollTop = out.scrollHeight;
+}
+
+function appendLine(cls, text) {
+  const out = document.getElementById("output");
+  const div = document.createElement("div");
+  div.className = cls;
+  div.textContent = text;
+  out.appendChild(div);
+  out.scrollTop = out.scrollHeight;
+}
+
+function clearOutput() {
+  document.getElementById("output").innerHTML = "";
+}
+
+function copyOutput() {
+  const text = document.getElementById("output").textContent;
+  navigator.clipboard.writeText(text).then(() => {
+    appendLine("info", "📋 Copied to clipboard");
+  });
+}
+
+function refreshJobList() {
+  fetch("/api/jobs")
+    .then(r => r.json())
+    .then(data => {
+      const div = document.getElementById("jobList");
+      div.innerHTML = "";
+      const jobs = data.jobs || [];
+      jobs.forEach(([id, mod, done]) => {
+        const pill = document.createElement("span");
+        pill.className = "job-pill" + (done ? " done" : "");
+        pill.textContent = `${done ? "✓" : "⋯"} ${mod} #${id.split("_")[1]}`;
+        pill.onclick = () => {
+          if (!done) startStream(id);
+        };
+        div.appendChild(pill);
+      });
+    });
+}
+
+function clearAll() {
+  fetch("/api/clear").then(() => {
+    clearOutput();
+    ACTIVE_JOBS = {};
+    Object.values(EVENT_SOURCES).forEach(es => es.close());
+    EVENT_SOURCES = {};
+    updateStatus("idle", "dot-off");
+    refreshJobList();
+    appendLine("info", "🗑 All jobs cleared");
+  });
+}
+
+// Keyboard shortcut
+document.getElementById("targetInput").addEventListener("keydown", (e) => {
+  if (e.key === "Enter") runCurrent();
+});
+
+init();
+</script>
+</body>
+</html>
