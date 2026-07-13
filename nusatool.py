@@ -3877,8 +3877,22 @@ class ServiceBruteforcer:
                     if lines:
                         setattr(self, attr, lines)
 
+    def _ssh_alive(self, timeout=2.5):
+        """Pre-check SSH banner via raw socket. Returns True if server responds with SSH-."""
+        try:
+            import socket as _sock
+            s = _sock.socket(_sock.AF_INET, _sock.SOCK_STREAM)
+            s.settimeout(timeout)
+            s.connect((self.target, self.port or 22))
+            banner = s.recv(64).decode(errors="ignore")
+            s.close()
+            return banner.startswith("SSH-")
+        except: return False
+
     def _try_ssh(self, user, pwd):
         try:
+            import logging
+            logging.getLogger("paramiko").setLevel(logging.CRITICAL)
             import paramiko
             client = paramiko.SSHClient()
             client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
@@ -3977,6 +3991,14 @@ class ServiceBruteforcer:
         print(f"  {D}{'─'*50}{N}")
         if not hasattr(self, f"_try_{self.service}"):
             print(f"  {R}✘{N} Services: {', '.join(self.PORTS.keys())}\n"); return []
+        if self.service == "ssh":
+            print(f"  {C}◉{N} Pre-checking SSH banner...", end=" ")
+            if self._ssh_alive():
+                print(f"{G}alive{N}")
+            else:
+                print(f"{R}no response{N}  {Y}⚠ Skip — server not responding with SSH banner{N}")
+                print(f"  {D}  Tip: the port may be filtered or service is not SSH{N}\n")
+                return []
         for u in self.users:
             for p in self.passes:
                 self.q.put((u, p))
