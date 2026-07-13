@@ -1,0 +1,25 @@
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.swp
+*.swo
+
+# Report artifacts
+autopwn_report.*
+nusatool_report.*
+nusatool_session.json
+sqli_dump_*
+params_*
+captcha.png
+*.txt
+
+# Environments
+.env
+venv/
+.venv/
+env/
+
+# OS
+.DS_Store
+Thumbs.db
