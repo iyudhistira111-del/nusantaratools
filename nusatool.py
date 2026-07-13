@@ -4085,16 +4085,157 @@ class ServiceExploiter:
 
 class GoogleDorker:
     DORKS = {
-        "sqli": ["inurl:php?id=", "inurl:asp?id=", "inurl:aspx?id=", "inurl:jsp?id=", "inurl:news.php?id="],
-        "lfi": ["inurl:index.php?file=", "inurl:page=include", "inurl:?page=../../"],
-        "rfi": ["inurl:?file=http://", "inurl:?page=http://", "inurl:?include=http://"],
-        "admin": ["inurl:/admin", "inurl:/administrator", "inurl:/login", "intitle:\"admin login\""],
-        "wp": ["inurl:/wp-admin", "inurl:/wp-content", "intitle:\"WordPress\" inurl:\"wp-\""],
-        "phpinfo": ["inurl:phpinfo.php", "intitle:\"phpinfo()\"", "ext:php intitle:phpinfo"],
-        "upload": ["inurl:upload.php", "inurl:file.php", "inurl:uploader", "inurl:filemanager"],
-        "cve": ["inurl:?option=com_", "inurl:?page=user", "inurl:?id=1 union"],
-        "config": ["ext:cfg \"database_password\"", "ext:sql \"INSERT INTO\"", "ext:env DB_PASSWORD"],
-        "all": ["inurl:php?id=", "inurl:admin", "inurl:upload.php", "intitle:phpinfo"],
+        "sqli": [
+            "inurl:php?id=", "inurl:asp?id=", "inurl:aspx?id=", "inurl:jsp?id=",
+            "inurl:news.php?id=", "inurl:product.php?id=", "inurl:article.php?id=",
+            "inurl:page.php?id=", "inurl:item.php?id=", "inurl:cat.php?id=",
+            "inurl:detail.php?id=", "inurl:view.php?id=", "inurl:show.php?id=",
+            "inurl:index.php?id=", "inurl:main.php?id=", "inurl:content.php?id=",
+            "inurl:post.php?id=", "inurl:story.php?id=", "inurl:section.php?id=",
+            "inurl:thread.php?id=", "inurl:topic.php?id=", "inurl:reply.php?id=",
+            "inurl:comment.php?id=", "inurl:profile.php?id=", "inurl:member.php?id=",
+            "inurl:user.php?id=", "inurl:gallery.php?id=", "inurl:photo.php?id=",
+            "inurl:video.php?id=", "inurl:download.php?id=", "inurl:file.php?id=",
+            "inurl:image.php?id=", "inurl:doc.php?id=", "inurl:read.php?id=",
+            "inurl:news.php?item=", "inurl:news.php?cat=", "inurl:product.php?cat=",
+            "inurl:article.php?cat=", "inurl:news.php?page=", "inurl:index.php?page=",
+            "inurl:index.php?cat=", "inurl:blog.php?id=", "inurl:portfolio.php?id=",
+            "inurl:event.php?id=", "inurl:service.php?id=", "inurl:team.php?id=",
+            "inurl:testimonial.php?id=", "inurl:faq.php?id=", "inurl:review.php?id=",
+            "inurl:course.php?id=", "inurl:lesson.php?id=", "inurl:quiz.php?id=",
+            "inurl:order.php?id=", "inurl:invoice.php?id=", "inurl:ticket.php?id=",
+            "inurl:?uid=", "inurl:?cid=", "inurl:?pid=", "inurl:?sid=",
+            "inurl:?gid=", "inurl:?bid=", "inurl:?mid=", "inurl:?nid=",
+            "inurl:?aid=", "inurl:?tid=", "inurl:?fid=", "inurl:?did=",
+        ],
+        "lfi": [
+            "inurl:index.php?file=", "inurl:?page=include", "inurl:?page=../../",
+            "inurl:?file=../../", "inurl:?dir=../../", "inurl:?path=../../",
+            "inurl:?include=../../", "inurl:?require=../../", "inurl:?template=",
+            "inurl:?view=", "inurl:?load=", "inurl:?content=", "inurl:?document=",
+            "inurl:?folder=", "inurl:?root=", "inurl:?inc=", "inurl:?locate=",
+            "inurl:?show=", "inurl:?pg=", "inurl:?page=php://", "inurl:?file=php://",
+            "inurl:?page=data://", "inurl:?file=data://", "inurl:?page=expect://",
+            "inurl:?page=file://", "inurl:?file=file://",
+        ],
+        "rfi": [
+            "inurl:?file=http://", "inurl:?page=http://", "inurl:?include=http://",
+            "inurl:?load=http://", "inurl:?path=http://", "inurl:?template=http://",
+            "inurl:?view=http://", "inurl:?content=http://", "inurl:?document=http://",
+            "inurl:?src=http://", "inurl:?data=http://", "inurl:?url=http://",
+        ],
+        "admin": [
+            "inurl:/admin", "inurl:/administrator", "inurl:/login",
+            "intitle:\"admin login\"", "inurl:/admin/login.php", "inurl:/admin/index.php",
+            "inurl:/admin/admin.php", "inurl:/admin/cp.php", "inurl:/admin/panel.php",
+            "inurl:/admin/dashboard.php", "inurl:/admin/home.php",
+            "inurl:/management", "inurl:/panel", "inurl:/cpanel",
+            "inurl:/secure", "inurl:/admin_area", "inurl:/sysadmin",
+            "inurl:/controlpanel", "inurl:/backoffice", "inurl:/webadmin",
+            "intitle:\"control panel\"", "intitle:\"administration\"",
+        ],
+        "wp": [
+            "inurl:/wp-admin", "inurl:/wp-content", "intitle:\"WordPress\" inurl:\"wp-\"",
+            "inurl:/wp-content/uploads/", "inurl:/wp-includes/", "inurl:/wp-config",
+            "inurl:/wp-login.php", "inurl:/wp-admin/admin-ajax.php",
+            "inurl:/wp-content/plugins/", "inurl:/wp-content/themes/",
+            "inurl:/wp-content/backup-", "inurl:/wp-content/debug.log",
+            "inurl:/wp-json/", "inurl:/xmlrpc.php",
+            "inurl:/wp-admin?page=", "inurl:/?p=",
+        ],
+        "joomla": [
+            "inurl:/index.php?option=com_", "inurl:/administrator/",
+            "inurl:/components/com_", "inurl:/modules/mod_",
+            "inurl:/plugins/", "inurl:/templates/",
+            "inurl:/language/", "inurl:/cache/",
+            "inurl:/logs/", "inurl:/tmp/",
+            "inurl:/components/com_joomla", "inurl:/index.php?option=com_users",
+            "inurl:/index.php?option=com_content", "inurl:/index.php?option=com_config",
+        ],
+        "phpinfo": [
+            "inurl:phpinfo.php", "intitle:\"phpinfo()\"", "ext:php intitle:phpinfo",
+            "inurl:info.php", "inurl:test.php intitle:phpinfo",
+            "inurl:infos.php", "inurl:php_info.php", "inurl:phpversion.php",
+            "inurl:system.php?phpinfo", "inurl:phpinfo.php?var=",
+        ],
+        "upload": [
+            "inurl:upload.php", "inurl:file.php", "inurl:uploader",
+            "inurl:filemanager", "inurl:upload/", "inurl:uploads/",
+            "inurl:files/", "inurl:fileadmin/", "inurl:file_upload",
+            "inurl:uploadify", "inurl:plupload", "inurl:dropzone",
+            "inurl:upload.cgi", "inurl:upload.asp", "inurl:upload.aspx",
+            "inurl:file_upload.php", "inurl:simple_upload.php",
+            "inurl:ajax_upload.php", "inurl:image_upload.php",
+            "inurl:single_upload.php", "inurl:multi_upload.php",
+        ],
+        "backup": [
+            "ext:bak", "ext:old", "ext:swp", "ext:sql inurl:backup",
+            "ext:tar inurl:backup", "ext:zip inurl:backup",
+            "inurl:/backup/", "inurl:/bak/", "inurl:/old/",
+            "inurl:/db_backup", "inurl:/database_backup",
+            "inurl:/sql_backup", "inurl:/backup.sql",
+            "inurl:/dump.sql", "inurl:/db.sql",
+            "inurl:/wp-config.bak", "inurl:/.git/config",
+        ],
+        "panel": [
+            "inurl:/panel", "inurl:/cpanel", "inurl:/whm",
+            "inurl:/plesk", "inurl:/webmin", "inurl:/vesta",
+            "inurl:/sentora", "inurl:/directadmin", "inurl:/ispconfig",
+            "inurl:/kloxo", "inurl:/zpanel", "inurl:/cwp",
+            "inurl:/aaamta", "inurl:/configserver",
+            "intitle:\"login\" webmail", "inurl:/webmail",
+        ],
+        "config": [
+            "ext:cfg \"database_password\"", "ext:sql \"INSERT INTO\"",
+            "ext:env DB_PASSWORD", "inurl:/config/", "inurl:/configuration/",
+            "inurl:/settings/", "inurl:/includes/config",
+            "inurl:/config.php", "inurl:/configuration.php",
+            "ext:xml \"password\"", "ext:ini \"password\"",
+            "ext:conf \"password\"", "ext:yml \"database\"",
+            "ext:json \"password\"", "ext:yaml \"database_password\"",
+        ],
+        "api": [
+            "inurl:/api/", "inurl:/api/v1", "inurl:/api/v2",
+            "inurl:/graphql", "inurl:/swagger", "inurl:/docs/",
+            "inurl:/openapi", "inurl:/api/docs", "inurl:/api/documentation",
+            "inurl:/rest/api", "inurl:/api/swagger", "inurl:/api/rest",
+            "inurl:/api/login", "inurl:/api/auth",
+        ],
+        "exposed": [
+            "intitle:\"index of\" admin", "intitle:\"index of\" backup",
+            "intitle:\"index of\" config", "intitle:\"index of\" database",
+            "intitle:\"index of\" mysql", "intitle:\"index of\" password",
+            "intitle:\"index of\" secret", "intitle:\"index of\" .git",
+            "intitle:\"index of\" .env", "intitle:\"index of\" logs",
+            "intitle:\"index of\" /cgi-bin", "intitle:\"index of\" private",
+            "intitle:\"index of\" src", "intitle:\"directory listing\" password",
+        ],
+        "cve": [
+            "inurl:?option=com_", "inurl:?page=user", "inurl:?id=1 union",
+            "inurl:?option=com_content", "inurl:?option=com_user",
+            "inurl:?option=com_jce", "inurl:?option=com_jdownloads",
+            "inurl:?option=com_seblod", "inurl:?option=com_fabrik",
+            "inurl:?option=com_akeeba", "inurl:?option=com_virtuemart",
+            "inurl:?option=com_jomcom", "inurl:?option=com_easyblog",
+            "inurl:?option=com_kunena", "inurl:?option=com_rsform",
+        ],
+        "param": [
+            "inurl:?search=", "inurl:?query=", "inurl:?q=",
+            "inurl:?s=", "inurl:?keyword=", "inurl:?term=",
+            "inurl:?lang=", "inurl:?theme=", "inurl:?style=",
+            "inurl:?color=", "inurl:?width=", "inurl:?height=",
+            "inurl:?limit=", "inurl:?offset=", "inurl:?start=",
+            "inurl:?sort=", "inurl:?order=", "inurl:?by=",
+            "inurl:?searchword=", "inurl:?search term=",
+        ],
+        "all": [
+            "inurl:php?id=", "inurl:admin", "inurl:upload.php",
+            "intitle:phpinfo", "inurl:/wp-content", "inurl:/backup",
+            "inurl:/api/v1", "inurl:/panel/login", "inurl:/index.php?option=com_",
+            "inurl:?page=../../", "inurl:?file=http://",
+            "intitle:\"index of\" admin", "ext:env DB_PASSWORD",
+            "inurl:/config/", "inurl:/.git/config",
+        ],
     }
     REGION_DOMAINS = {"id": ".id", "my": ".my", "sg": ".sg", "jp": ".jp", "kr": ".kr",
                       "cn": ".cn", "us": ".com", "uk": ".uk", "de": ".de", "fr": ".fr",
@@ -4145,13 +4286,16 @@ class GoogleDorker:
         queries = self._build_queries()
         print(f"  {C}◉{N} Category: {Y}{self.category}{N}  Region: {Y}{self.region}{N}  Max targets: {Y}{self.pages*10}{N}")
         print(f"  {C}◉{N} Query(s): {len(queries)}")
-        for q in queries[:3]:
+        for q in queries[:10]:
             print(f"    {W}{q[:90]}{N}")
+        if len(queries) > 10:
+            print(f"    {D}... and {len(queries)-10} more{N}")
         print()
 
+        dork_limit = min(len(queries), 12)
         all_raw = set()
-        for qi, q in enumerate(queries[:3], 1):
-            print(f"  {Y}[{qi}/{len(queries[:3])}]{N} {W}{q[:70]}{N}")
+        for qi, q in enumerate(queries[:dork_limit], 1):
+            print(f"  {Y}[{qi}/{dork_limit}]{N} {W}{q[:70]}{N}")
             for attempt in range(2):
                 print(f"    {C}▶{N} Searching DuckDuckGo...", end="\r")
                 urls = self._search_ddgs(q, max_results=self.pages*10)
